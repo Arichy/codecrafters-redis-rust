@@ -178,8 +178,22 @@ impl CommandDispatcher {
             _ => Ok(None),
         };
         
-        // TODO: Propagate write commands to slaves if we're master
-        // This requires proper handling of the broadcast channel in server module
+        // Propagate write commands to slaves if we're master
+        if !is_slave && result.is_ok() {
+            // Check if this is a write command
+            let is_write_command = matches!(cmd.as_str(), 
+                "set" | "del" | "incr" | "rpush" | "lpush" | "lpop" | 
+                "xadd" | "zadd" | "zrem" | "sadd" | "srem"
+            );
+            
+            if is_write_command {
+                // Broadcast the command to all replicas
+                let _ = self.command_tx.send(CommandMessage {
+                    message: message.clone(),
+                    peer_addr: peer_addr.to_string(),
+                });
+            }
+        }
         
         result
     }
