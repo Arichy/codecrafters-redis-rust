@@ -66,9 +66,11 @@ pub async fn handle(_params: &[&str], ctx: &CommandContext) -> Result<Option<Mes
                                                 state.expected_offset
                                             };
                                             
-                                            if actual_offset + message.length()? == expected_offset {
+                                            eprintln!("DEBUG PSYNC ACK: actual_offset: {}, expected_offset: {}", actual_offset, expected_offset);
+                                            if actual_offset >= expected_offset {
                                                 let mut state = ctx.replication_state.lock().await;
                                                 state.increment_ack();
+                                                eprintln!("DEBUG PSYNC ACK: Incremented acks");
                                             }
                                         }
                                     }
