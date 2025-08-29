@@ -20,7 +20,16 @@ impl Store {
     
     pub async fn load_from_rdb(&self, content: &[u8]) -> Result<()> {
         let mut bytes = Bytes::from(content.to_vec());
-        let rdb = RDB::from_bytes(&mut bytes)?;
+        let mut rdb = RDB::from_bytes(&mut bytes)?;
+        
+        // Ensure database 0 exists
+        if !rdb.databases.iter().any(|db| db.index == 0) {
+            rdb.databases.push(crate::rdb::Database {
+                index: 0,
+                map: std::collections::BTreeMap::new(),
+            });
+        }
+        
         let mut store_rdb = self.rdb.write().await;
         *store_rdb = rdb;
         Ok(())

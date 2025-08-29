@@ -130,7 +130,7 @@ impl Connection {
                         let message_length = message.length()?;
                         let mut state = self.replication_state.lock().await;
                         state.offset += message_length;
-                        
+
                         if let Some(response) = response {
                             let mut writer = message_writer.lock().await;
                             writer.send(response).await?;
