@@ -91,6 +91,12 @@ impl Connection {
         );
         
         loop {
+            if is_slave {
+                let state = self.replication_state.lock().await;
+                eprintln!("DEBUG: Loop start, current offset: {}", state.offset);
+                drop(state);
+            }
+            
             let message = {
                 let mut reader = message_reader.lock().await;
                 reader.next().await
@@ -106,18 +112,21 @@ impl Connection {
             
             // Debug: Log every message received by slave
             if is_slave {
+                let msg_len = message.length().unwrap_or(0);
                 match &message {
                     Message::Array(arr) => {
                         if let Some(Message::BulkString(bs)) = arr.items.first() {
-                            eprintln!("DEBUG: Received command: {}", bs.string);
+                            eprintln!("DEBUG: Received command: {} (length: {})", bs.string, msg_len);
                         } else {
-                            eprintln!("DEBUG: Received array message with {} items", arr.items.len());
+                            eprintln!("DEBUG: Received array message with {} items (length: {})", arr.items.len(), msg_len);
                         }
                     }
                     Message::RDB(_) => eprintln!("DEBUG: Received RDB message"),
-                    Message::SimpleString(s) => eprintln!("DEBUG: Received simple string: {}", s.string),
-                    Message::BulkString(bs) => eprintln!("DEBUG: Received bulk string: {}", bs.string),
-                    _ => eprintln!("DEBUG: Received other message type"),
+                    Message::SimpleString(s) => eprintln!("DEBUG: Received simple string: {} (length: {})", s.string, msg_len),
+                    Message::BulkString(bs) => eprintln!("DEBUG: Received bulk string: {} (length: {})", bs.string, msg_len),
+                    Message::Integer(i) => eprintln!("DEBUG: Received integer: {} (length: {})", i.value, msg_len),
+                    Message::SimpleError(e) => eprintln!("DEBUG: Received error: {} (length: {})", e.string, msg_len),
+                    _ => eprintln!("DEBUG: Received unknown message type (length: {})", msg_len),
                 }
             }
             
