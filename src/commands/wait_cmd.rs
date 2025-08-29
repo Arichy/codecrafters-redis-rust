@@ -16,6 +16,17 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
     let timeout_ms: u64 = params[1].parse()
         .map_err(|_| anyhow::anyhow!("Invalid timeout"))?;
     
+    // Check if we have any replicas connected
+    {
+        let state = ctx.replication_state.lock().await;
+        if state.total_replica_count == 0 {
+            // No replicas connected, return 0 immediately
+            return Ok(Some(Message::Integer(Integer {
+                value: 0,
+            })));
+        }
+    }
+    
     // Send REPLCONF GETACK to all replicas
     let get_ack_msg = Message::Array(Array {
         items: vec![
