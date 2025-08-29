@@ -1,4 +1,5 @@
 use anyhow::Result;
+use futures_util::SinkExt;
 use tokio::time::Duration;
 use crate::message::{Message, Array, BulkString, SimpleError};
 use crate::commands::CommandContext;
@@ -42,44 +43,31 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
         timeout_secs,
     ).await;
     
-    // Wait for notification or timeout
-    let timeout_duration = if timeout_secs == 0.0 {
-        None
-    } else {
-        Some(Duration::from_secs_f64(timeout_secs))
-    };
-    
-    let notified = ctx.blocking_manager.wait_for_key(notify, timeout_duration).await;
-    
-    if notified {
-        // Try to pop again after being notified
-        let values = ctx.store.lpop(db_index, key, 1).await?;
-        if !values.is_empty() {
-            Ok(Some(Message::Array(Array {
-                items: vec![
-                    Message::BulkString(BulkString {
-                        length: key.len() as isize,
-                        string: key.to_string(),
-                    }),
-                    Message::BulkString(BulkString {
-                        length: values[0].len() as isize,
-                        string: values[0].clone(),
-                    }),
-                ],
-            })))
+    // Spawn a task to handle timeout
+    let blocking_manager = ctx.blocking_manager.clone();
+    let peer_addr = ctx.peer_addr.clone();
+    let writer = ctx.message_writer.clone();
+    tokio::spawn(async move {
+        let timeout_duration = if timeout_secs == 0.0 {
+            None
         } else {
-            // This shouldn't happen, but handle it gracefully
-            Ok(Some(Message::BulkString(BulkString {
+            Some(Duration::from_secs_f64(timeout_secs))
+        };
+        
+        let notified = blocking_manager.wait_for_key(notify, timeout_duration).await;
+        
+        if !notified {
+            // Timed out - send NIL response
+            blocking_manager.remove_client(&peer_addr).await;
+            let mut writer = writer.lock().await;
+            let _ = writer.send(Message::BulkString(BulkString {
                 length: -1,
                 string: String::new(),
-            })))
+            })).await;
         }
-    } else {
-        // Timed out
-        ctx.blocking_manager.remove_client(&ctx.peer_addr).await;
-        Ok(Some(Message::BulkString(BulkString {
-            length: -1,
-            string: String::new(),
-        })))
-    }
+        // If notified, RPUSH/LPUSH already sent the response
+    });
+    
+    // Return None to indicate no immediate response
+    Ok(None)
 }

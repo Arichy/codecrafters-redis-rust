@@ -84,25 +84,22 @@ impl BlockingCommandManager {
         }
     }
     
-    pub async fn notify_waiting_clients(&self, key: &str) -> Option<(String, MessageWriter)> {
+    pub async fn pop_waiting_client(&self, key: &str) -> Option<BlockingClient> {
         let mut waiting_clients = self.waiting_clients.write().await;
         let mut client_keys = self.client_keys.write().await;
         
         if let Some(clients) = waiting_clients.get_mut(key) {
             if let Some(client) = clients.pop() {
                 // Remove from client_keys tracking
-                // Note: We need a way to identify the client address from the BlockingClient
-                // For now, we'll just notify and return the writer
-                
-                // Notify the client
-                client.notify.notify_one();
+                // We need to find and remove the client from client_keys
+                client_keys.retain(|_, (k, _)| k != key || clients.iter().any(|c| Arc::ptr_eq(&c.notify, &client.notify)));
                 
                 // Clean up if no more clients
                 if clients.is_empty() {
                     waiting_clients.remove(key);
                 }
                 
-                return Some((client.key, client.writer));
+                return Some(client);
             }
         }
         
