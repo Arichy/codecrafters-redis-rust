@@ -33,6 +33,17 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
         })));
     }
     
+    // Handle ACK from replicas (when we're the master)
+    if !ctx.is_slave && params.len() >= 2 && params[0].to_lowercase() == "ack" {
+        if let Ok(replica_offset) = params[1].parse::<usize>() {
+            let mut state = ctx.replication_state.lock().await;
+            // Check if the replica has acknowledged up to the expected offset
+            if replica_offset >= state.expected_offset {
+                state.increment_ack();
+            }
+        }
+    }
+    
     Ok(Some(Message::SimpleString(SimpleString {
         string: "OK".to_string(),
     })))
