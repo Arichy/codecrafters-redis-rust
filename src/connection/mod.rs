@@ -105,10 +105,22 @@ impl Connection {
             let message = message.unwrap()?;
             
             if is_slave {
-                // Update offset for slave
-                let message_length = message.length()?;
-                let mut state = self.replication_state.lock().await;
-                state.offset += message_length;
+                // Update offset for slave (but not for RDB messages)
+                if !matches!(message, Message::RDB(_)) {
+                    let message_length = message.length()?;
+                    let mut state = self.replication_state.lock().await;
+                    state.offset += message_length;
+                }
+            }
+            
+            // Handle RDB messages specially for slaves
+            if is_slave {
+                if let Message::RDB(rdb_content) = &message {
+                    // Load the RDB content into the store
+                    let rdb_bytes = rdb_content.to_bytes();
+                    self.store.load_from_rdb(&rdb_bytes).await?;
+                    continue; // Skip normal message processing
+                }
             }
             
             let response = handle_message_internal(
