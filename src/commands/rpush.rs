@@ -19,9 +19,7 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
     match ctx.store.rpush(db_index, key, values).await {
         Ok(len) => {
             // Then check if there are clients waiting for this key
-            eprintln!("DEBUG RPUSH: Checking for waiting clients on key: {}", key);
             while ctx.blocking_manager.has_waiting_clients(key).await {
-                eprintln!("DEBUG RPUSH: Found waiting clients");
                 // First check if there's a value available
                 match ctx.store.lpop(db_index, key, 1).await {
                     Ok(popped_values) if !popped_values.is_empty() => {

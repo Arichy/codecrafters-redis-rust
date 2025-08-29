@@ -157,7 +157,7 @@ impl Store {
         
         match &mut list.value {
             ValueType::ListValue(list_value) => {
-                for value in values.into_iter().rev() {
+                for value in values {
                     list_value.list.push_front(value);
                 }
                 Ok(list_value.list.len())

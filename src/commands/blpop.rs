@@ -36,7 +36,6 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
     }
     
     // If no value available, register as blocking client
-    eprintln!("DEBUG BLPOP: Registering client {} for key: {}", ctx.peer_addr, key);
     let notify = ctx.blocking_manager.add_blocking_client(
         &ctx.peer_addr,
         key,
@@ -48,7 +47,6 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
     let blocking_manager = ctx.blocking_manager.clone();
     let peer_addr = ctx.peer_addr.clone();
     let writer = ctx.message_writer.clone();
-    let key = key.to_string();
     tokio::spawn(async move {
         let timeout_duration = if timeout_secs == 0.0 {
             None
@@ -59,7 +57,6 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
         let notified = blocking_manager.wait_for_key(notify, timeout_duration).await;
         
         if !notified {
-            eprintln!("DEBUG BLPOP: Client {} timed out for key: {}", peer_addr, key);
             // Timed out - send NIL response
             blocking_manager.remove_client(&peer_addr).await;
             let mut writer = writer.lock().await;
@@ -67,8 +64,6 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
                 length: -1,
                 string: String::new(),
             })).await;
-        } else {
-            eprintln!("DEBUG BLPOP: Client {} was notified for key: {}", peer_addr, key);
         }
         // If notified, RPUSH/LPUSH already sent the response
     });
