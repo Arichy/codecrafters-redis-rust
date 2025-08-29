@@ -45,12 +45,14 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
         ],
     });
     
-    // Reset acks and update expected offset
-    {
+    // Reset acks and set expected offset to current master offset
+    let expected_offset = {
         let mut state = ctx.replication_state.lock().await;
         state.reset_acks();
-        state.expected_offset += get_ack_msg.length()?;
-    }
+        let current_offset = state.offset;
+        state.expected_offset = current_offset;
+        current_offset
+    };
     
     // Send GETACK to all replicas
     ctx.command_tx.send(CommandMessage {

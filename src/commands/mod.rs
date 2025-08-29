@@ -187,6 +187,13 @@ impl CommandDispatcher {
             );
             
             if is_write_command {
+                // Update master's replication offset
+                let message_length = message.length()?;
+                {
+                    let mut state = self.replication_state.lock().await;
+                    state.offset += message_length;
+                }
+                
                 // Broadcast the command to all replicas
                 let _ = self.command_tx.send(CommandMessage {
                     message: message.clone(),
