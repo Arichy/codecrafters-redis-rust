@@ -45,9 +45,10 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
         ],
     });
     
-    // Update expected offset
+    // Reset acks and update expected offset
     {
         let mut state = ctx.replication_state.lock().await;
+        state.reset_acks();
         state.expected_offset += get_ack_msg.length()?;
     }
     
@@ -69,7 +70,7 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
         
         if acked_count >= numreplicas {
             return Ok(Some(Message::Integer(Integer {
-                value: acked_count as i64,
+                value: numreplicas as i64,
             })));
         }
         
@@ -79,8 +80,9 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
         
         if remaining_time.is_zero() {
             let state = ctx.replication_state.lock().await;
+            let count = std::cmp::min(numreplicas, state.acked_replica_count);
             return Ok(Some(Message::Integer(Integer {
-                value: state.acked_replica_count as i64,
+                value: count as i64,
             })));
         }
         
@@ -91,8 +93,9 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
         
         if timeout(remaining_time, wait_notify.notified()).await.is_err() {
             let state = ctx.replication_state.lock().await;
+            let count = std::cmp::min(numreplicas, state.acked_replica_count);
             return Ok(Some(Message::Integer(Integer {
-                value: state.acked_replica_count as i64,
+                value: count as i64,
             })));
         }
     }

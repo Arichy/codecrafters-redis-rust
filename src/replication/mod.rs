@@ -37,7 +37,6 @@ impl ReplicationState {
     
     pub fn add_replica(&mut self) {
         self.total_replica_count += 1;
-        self.acked_replica_count += 1;
     }
     
     pub fn remove_replica(&mut self) {
