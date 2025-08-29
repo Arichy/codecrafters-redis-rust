@@ -36,7 +36,6 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
     }
     
     // If no value available, register as blocking client
-    eprintln!("BLPOP: Registering as blocking client for key: {}", key);
     let notify = ctx.blocking_manager.add_blocking_client(
         &ctx.peer_addr,
         key,
@@ -55,11 +54,9 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
             Some(Duration::from_secs_f64(timeout_secs))
         };
         
-        eprintln!("BLPOP: Waiting for notification with timeout: {:?}", timeout_duration);
         let notified = blocking_manager.wait_for_key(notify, timeout_duration).await;
         
         if !notified {
-            eprintln!("BLPOP: Timed out, sending NIL");
             // Timed out - send NIL response
             blocking_manager.remove_client(&peer_addr).await;
             let mut writer = writer.lock().await;
@@ -67,8 +64,6 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
                 length: -1,
                 string: String::new(),
             })).await;
-        } else {
-            eprintln!("BLPOP: Got notification, response already sent by RPUSH/LPUSH");
         }
         // If notified, RPUSH/LPUSH already sent the response
     });

@@ -74,10 +74,7 @@ impl BlockingCommandManager {
         if let Some((key, _)) = client_keys.remove(client_addr) {
             // Remove from waiting list
             if let Some(clients) = waiting_clients.get_mut(&key) {
-                clients.retain(|c| {
-                    // We need a way to identify the client, we'll use the writer address
-                    true // For now, we'll need to improve this
-                });
+                clients.retain(|c| c.client_addr != client_addr);
                 
                 if clients.is_empty() {
                     waiting_clients.remove(&key);
