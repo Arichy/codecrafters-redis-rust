@@ -12,9 +12,7 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
     if ctx.is_slave && params[0].to_lowercase() == "getack" {
         let offset = {
             let state = ctx.replication_state.lock().await;
-            // Subtract the length of this REPLCONF GETACK message
-            // Note: The actual message length calculation would need to be done properly
-            state.offset.saturating_sub(37) // Approximate length of REPLCONF GETACK *
+            state.offset
         };
         
         return Ok(Some(Message::Array(Array {
