@@ -20,10 +20,11 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
         Ok(len) => {
             // Then check if there are clients waiting for this key
             while ctx.blocking_manager.has_waiting_clients(key).await {
-                if let Some(client) = ctx.blocking_manager.pop_waiting_client(key).await {
-                    // Try to pop a value for the waiting client
-                    match ctx.store.lpop(db_index, key, 1).await {
-                        Ok(popped_values) if !popped_values.is_empty() => {
+                // First check if there's a value available
+                match ctx.store.lpop(db_index, key, 1).await {
+                    Ok(popped_values) if !popped_values.is_empty() => {
+                        // We have a value, now pop a waiting client
+                        if let Some(client) = ctx.blocking_manager.pop_waiting_client(key).await {
                             let value = &popped_values[0];
                             let response = Message::Array(Array {
                                 items: vec![
@@ -40,11 +41,15 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
                             
                             let mut writer = client.writer.lock().await;
                             let _ = writer.send(response).await;
-                        }
-                        _ => {
-                            // No more values in the list
+                        } else {
+                            // No waiting client but we popped a value, push it back
+                            let _ = ctx.store.lpush(db_index, key, popped_values).await;
                             break;
                         }
+                    }
+                    _ => {
+                        // No more values in the list, stop checking
+                        break;
                     }
                 }
             }
