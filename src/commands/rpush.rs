@@ -39,6 +39,9 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
                                 ],
                             });
                             
+                            // Notify the client's task that we've handled the response
+                            client.notify.notify_one();
+                            
                             let mut writer = client.writer.lock().await;
                             let _ = writer.send(response).await;
                         } else {
