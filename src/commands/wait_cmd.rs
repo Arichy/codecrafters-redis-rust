@@ -31,9 +31,8 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
     
     // If no commands have been sent (offset is 0), all replicas are already synchronized
     if current_offset == 0 {
-        let count = std::cmp::min(numreplicas, total_replica_count);
-        eprintln!("DEBUG WAIT: No commands sent, returning min({}, {}) = {}", numreplicas, total_replica_count, count);
-        return Ok(Some(Message::Integer(Integer { value: count as i64 })));
+        eprintln!("DEBUG WAIT: No commands sent, all {} replicas are synchronized", total_replica_count);
+        return Ok(Some(Message::Integer(Integer { value: total_replica_count as i64 })));
     }
     
     // Send REPLCONF GETACK to all replicas
