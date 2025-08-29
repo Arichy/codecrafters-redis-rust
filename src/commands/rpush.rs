@@ -19,12 +19,15 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
     match ctx.store.rpush(db_index, key, values).await {
         Ok(len) => {
             // Then check if there are clients waiting for this key
+            eprintln!("RPUSH: Checking for waiting clients on key: {}", key);
             while ctx.blocking_manager.has_waiting_clients(key).await {
+                eprintln!("RPUSH: Found waiting clients");
                 // First check if there's a value available
                 match ctx.store.lpop(db_index, key, 1).await {
                     Ok(popped_values) if !popped_values.is_empty() => {
                         // We have a value, now pop a waiting client
                         if let Some(client) = ctx.blocking_manager.pop_waiting_client(key).await {
+                            eprintln!("RPUSH: Popped client, sending value");
                             let value = &popped_values[0];
                             let response = Message::Array(Array {
                                 items: vec![
@@ -40,9 +43,11 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
                             });
                             
                             // Notify the client's task that we've handled the response
+                            eprintln!("RPUSH: Notifying client task");
                             client.notify.notify_one();
                             
                             let mut writer = client.writer.lock().await;
+                            eprintln!("RPUSH: Sending response to client");
                             let _ = writer.send(response).await;
                         } else {
                             // No waiting client but we popped a value, push it back

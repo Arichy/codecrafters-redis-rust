@@ -37,12 +37,9 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
     if !ctx.is_slave && params.len() >= 2 && params[0].to_lowercase() == "ack" {
         if let Ok(replica_offset) = params[1].parse::<usize>() {
             let mut state = ctx.replication_state.lock().await;
-            eprintln!("DEBUG REPLCONF ACK: Received offset: {}, expected_offset: {}, current acks: {}", 
-                     replica_offset, state.expected_offset, state.acked_replica_count);
             // Check if the replica has acknowledged up to the expected offset
             if replica_offset >= state.expected_offset {
                 state.increment_ack();
-                eprintln!("DEBUG REPLCONF ACK: Incremented acks to: {}", state.acked_replica_count);
             }
         }
     }

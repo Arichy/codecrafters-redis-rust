@@ -31,7 +31,6 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
     
     // If no commands have been sent (offset is 0), all replicas are already synchronized
     if current_offset == 0 {
-        eprintln!("DEBUG WAIT: No commands sent, all {} replicas are synchronized", total_replica_count);
         return Ok(Some(Message::Integer(Integer { value: total_replica_count as i64 })));
     }
     
@@ -59,7 +58,6 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
         state.reset_acks();
         let current_offset = state.offset;
         state.expected_offset = current_offset;
-        eprintln!("DEBUG WAIT: Current master offset: {}, expected_offset: {}", current_offset, current_offset);
         current_offset
     };
     

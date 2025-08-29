@@ -191,10 +191,7 @@ impl CommandDispatcher {
                 let message_length = message.length()?;
                 {
                     let mut state = self.replication_state.lock().await;
-                    let old_offset = state.offset;
                     state.offset += message_length;
-                    eprintln!("DEBUG MASTER: Write command '{}', message length: {}, offset: {} -> {}", 
-                             cmd, message_length, old_offset, state.offset);
                 }
                 
                 // Broadcast the command to all replicas
