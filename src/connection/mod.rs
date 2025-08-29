@@ -104,6 +104,23 @@ impl Connection {
             
             let message = message.unwrap()?;
             
+            // Debug: Log every message received by slave
+            if is_slave {
+                match &message {
+                    Message::Array(arr) => {
+                        if let Some(Message::BulkString(bs)) = arr.items.first() {
+                            eprintln!("DEBUG: Received command: {}", bs.string);
+                        } else {
+                            eprintln!("DEBUG: Received array message with {} items", arr.items.len());
+                        }
+                    }
+                    Message::RDB(_) => eprintln!("DEBUG: Received RDB message"),
+                    Message::SimpleString(s) => eprintln!("DEBUG: Received simple string: {}", s.string),
+                    Message::BulkString(bs) => eprintln!("DEBUG: Received bulk string: {}", bs.string),
+                    _ => eprintln!("DEBUG: Received other message type"),
+                }
+            }
+            
             // Special handling for slaves
             if is_slave {
                 match &message {
@@ -132,12 +149,7 @@ impl Connection {
                         let old_offset = state.offset;
                         state.offset += message_length;
                         
-                        // Debug logging
-                        if let Message::Array(arr) = &message {
-                            if let Some(Message::BulkString(bs)) = arr.items.first() {
-                                eprintln!("DEBUG: After processing {}, offset: {} -> {}", bs.string, old_offset, state.offset);
-                            }
-                        }
+                        eprintln!("DEBUG: After processing, offset: {} -> {}", old_offset, state.offset);
                         
                         if let Some(response) = response {
                             let mut writer = message_writer.lock().await;
@@ -251,6 +263,9 @@ impl Connection {
         
         // Receive FULLRESYNC response
         let _ = self.socket.next().await.unwrap()?;
+        
+        // Note: The RDB file will be sent after FULLRESYNC and will be 
+        // handled in the main message loop
         
         Ok(())
     }
