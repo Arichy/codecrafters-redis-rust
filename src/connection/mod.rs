@@ -104,35 +104,61 @@ impl Connection {
             
             let message = message.unwrap()?;
             
-            // Handle RDB messages specially for slaves
+            // Special handling for slaves
             if is_slave {
-                if let Message::RDB(rdb_content) = &message {
-                    // Load the RDB content into the store
-                    let rdb_bytes = rdb_content.to_bytes();
-                    self.store.load_from_rdb(&rdb_bytes).await?;
-                    continue; // Skip normal message processing and offset tracking
+                match &message {
+                    Message::RDB(rdb_content) => {
+                        // Load the RDB content into the store
+                        let rdb_bytes = rdb_content.to_bytes();
+                        self.store.load_from_rdb(&rdb_bytes).await?;
+                        continue; // Skip normal message processing and offset tracking
+                    }
+                    _ => {
+                        // For non-RDB messages, process normally and track offset
+                        let response = handle_message_internal(
+                            &mut self.transaction_queue,
+                            &mut self.is_in_transaction,
+                            &peer_addr_str,
+                            message.clone(),
+                            &dispatcher,
+                            Arc::clone(&message_reader),
+                            Arc::clone(&message_writer),
+                            is_slave,
+                        ).await?;
+                        
+                        // Update offset AFTER processing
+                        let message_length = message.length()?;
+                        let mut state = self.replication_state.lock().await;
+                        let old_offset = state.offset;
+                        state.offset += message_length;
+                        
+                        // Debug logging
+                        if let Message::Array(arr) = &message {
+                            if let Some(Message::BulkString(bs)) = arr.items.first() {
+                                eprintln!("DEBUG: After processing {}, offset: {} -> {}", bs.string, old_offset, state.offset);
+                            }
+                        }
+                        
+                        if let Some(response) = response {
+                            let mut writer = message_writer.lock().await;
+                            writer.send(response).await?;
+                        }
+                        continue;
+                    }
                 }
             }
             
+            // Normal processing for non-slaves
             let response = handle_message_internal(
                 &mut self.transaction_queue,
                 &mut self.is_in_transaction,
                 &peer_addr_str,
-                message.clone(),
+                message,
                 &dispatcher,
                 Arc::clone(&message_reader),
                 Arc::clone(&message_writer),
                 is_slave,
             ).await?;
-            
-            if is_slave {
-                // Update offset for slave AFTER processing (but not for RDB messages)
-                if !matches!(message, Message::RDB(_)) {
-                    let message_length = message.length()?;
-                    let mut state = self.replication_state.lock().await;
-                    state.offset += message_length;
-                }
-            }
             
             if let Some(response) = response {
                 let mut writer = message_writer.lock().await;
