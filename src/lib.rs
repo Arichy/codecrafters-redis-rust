@@ -1,6 +1,10 @@
-#![allow(unused_imports)]
-#![allow(unused)]
-
 pub mod message;
 pub mod rdb;
 pub mod utils;
+pub mod server;
+pub mod connection;
+pub mod commands;
+pub mod store;
+pub mod replication;
+pub mod pubsub;
+pub mod blocking;
