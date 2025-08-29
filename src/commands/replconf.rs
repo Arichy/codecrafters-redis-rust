@@ -12,7 +12,6 @@ pub async fn handle(params: &[&str], ctx: &CommandContext) -> Result<Option<Mess
     if ctx.is_slave && params[0].to_lowercase() == "getack" {
         let offset = {
             let state = ctx.replication_state.lock().await;
-            eprintln!("DEBUG: REPLCONF GETACK reading offset: {}", state.offset);
             state.offset
         };
         

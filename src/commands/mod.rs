@@ -141,12 +141,7 @@ impl CommandDispatcher {
             }
         }
         
-        // Update replication offset if needed
-        if is_slave {
-            let message_length = message.length()?;
-            let mut state = self.replication_state.lock().await;
-            state.offset += message_length;
-        }
+
         
         // Dispatch to appropriate command handler
         let result = match cmd.as_str() {
