@@ -6,6 +6,7 @@ use tokio::time::{timeout, Duration, Instant};
 use crate::connection::MessageWriter;
 
 pub struct BlockingClient {
+    pub client_addr: String,
     pub key: String,
     pub writer: MessageWriter,
     pub timeout: Option<Duration>,
@@ -42,6 +43,7 @@ impl BlockingCommandManager {
         let notify = Arc::new(Notify::new());
         
         let blocking_client = BlockingClient {
+            client_addr: client_addr.to_string(),
             key: key.to_string(),
             writer,
             timeout: if timeout_secs == 0.0 {
@@ -89,10 +91,12 @@ impl BlockingCommandManager {
         let mut client_keys = self.client_keys.write().await;
         
         if let Some(clients) = waiting_clients.get_mut(key) {
-            if let Some(client) = clients.pop() {
+            if !clients.is_empty() {
+                // Take the first client (FIFO order)
+                let client = clients.remove(0);
+                
                 // Remove from client_keys tracking
-                // We need to find and remove the client from client_keys
-                client_keys.retain(|_, (k, _)| k != key || clients.iter().any(|c| Arc::ptr_eq(&c.notify, &client.notify)));
+                client_keys.remove(&client.client_addr);
                 
                 // Clean up if no more clients
                 if clients.is_empty() {
