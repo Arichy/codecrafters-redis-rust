@@ -1,0 +1,250 @@
+use anyhow::{Context as AnyhowContext, Result};
+use std::path::PathBuf;
+use std::time::Duration;
+use tokio::time::{timeout, Instant};
+
+use crate::commands::CommandContext;
+use crate::message::{Array, BulkString, Integer, Message, SimpleError, SimpleString};
+use crate::rdb::ValueType;
+use crate::server::Role;
+
+pub async fn ping(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
+    if ctx.is_slave {
+        return Ok(None);
+    }
+
+    let is_subscribed = ctx.server.pubsub.is_subscribed(&ctx.client_id).await;
+
+    if is_subscribed {
+        Ok(Some(Message::new_array(vec![
+            Message::new_bulk_string("pong".to_string()),
+            Message::new_bulk_string("".to_string()),
+        ])))
+    } else {
+        Ok(Some(Message::SimpleString(SimpleString {
+            string: "PONG".to_string(),
+        })))
+    }
+}
+
+pub async fn echo(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
+    if args.is_empty() {
+        return Ok(Some(Message::SimpleError(SimpleError {
+            string: "ERR wrong number of arguments for 'echo' command".to_string(),
+        })));
+    }
+
+    let echo_str = &args[0];
+    Ok(Some(Message::BulkString(BulkString {
+        length: echo_str.len() as isize,
+        string: echo_str.clone(),
+    })))
+}
+
+pub async fn info(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
+    let repl = ctx.server.replication.read().await;
+
+    let mut info_list = vec!["# Replication".to_string()];
+    info_list.push(format!(
+        "role:{}",
+        if repl.is_slave() { "slave" } else { "master" }
+    ));
+    info_list.push(format!("master_replid:{}", repl.master_replid));
+    info_list.push(format!("master_repl_offset:{}", repl.master_repl_offset));
+
+    let info_string = info_list.join("\r\n");
+
+    Ok(Some(Message::BulkString(BulkString {
+        length: info_string.len() as isize,
+        string: info_string,
+    })))
+}
+
+pub async fn config(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
+    if args.is_empty() {
+        return Ok(Some(Message::SimpleError(SimpleError {
+            string: "ERR wrong number of arguments for 'config' command".to_string(),
+        })));
+    }
+
+    let subcommand = args[0].to_lowercase();
+    match subcommand.as_str() {
+        "get" => {
+            if args.len() < 2 {
+                return Ok(Some(Message::SimpleError(SimpleError {
+                    string: "ERR wrong number of arguments for 'config get' command".to_string(),
+                })));
+            }
+
+            // This requires access to Args, which we need to pass through context
+            // For now, return empty
+            Ok(Some(Message::Array(Array { items: vec![] })))
+        }
+        _ => Ok(Some(Message::SimpleError(SimpleError {
+            string: format!("ERR unknown subcommand '{}'", subcommand),
+        }))),
+    }
+}
+
+pub async fn keys(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
+    if args.is_empty() {
+        return Ok(Some(Message::SimpleError(SimpleError {
+            string: "ERR wrong number of arguments for 'keys' command".to_string(),
+        })));
+    }
+
+    let rdb = ctx.server.rdb.read().await;
+    let db_index = *ctx.selected_db.read().await;
+    let db = rdb.get_db(db_index)?;
+
+    let items: Vec<Message> = db
+        .map
+        .keys()
+        .map(|k| Message::BulkString(BulkString {
+            length: k.len() as isize,
+            string: k.clone(),
+        }))
+        .collect();
+
+    Ok(Some(Message::Array(Array { items })))
+}
+
+pub async fn type_cmd(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
+    if args.is_empty() {
+        return Ok(Some(Message::SimpleError(SimpleError {
+            string: "ERR wrong number of arguments for 'type' command".to_string(),
+        })));
+    }
+
+    let key = &args[0];
+
+    let rdb = ctx.server.rdb.read().await;
+    let db_index = *ctx.selected_db.read().await;
+    let db = rdb.get_db(db_index)?;
+
+    let type_str = if let Some(value) = db.map.get(key) {
+        match value.value {
+            ValueType::StringValue(_) => "string",
+            ValueType::ListValue(_) => "list",
+            ValueType::StreamValue(_) => "stream",
+            ValueType::SortedSet(_) => "zset",
+        }
+    } else {
+        "none"
+    };
+
+    Ok(Some(Message::SimpleString(SimpleString {
+        string: type_str.to_string(),
+    })))
+}
+
+pub async fn replconf(
+    ctx: &CommandContext,
+    args: &[String],
+    message: &Message,
+) -> Result<Option<Message>> {
+    if ctx.is_slave && !args.is_empty() {
+        let subcommand = args[0].to_lowercase();
+        if subcommand == "getack" {
+            let mut repl = ctx.server.replication.write().await;
+            let offset = repl.slave_offset - message.length()?;
+
+            return Ok(Some(Message::Array(Array {
+                items: vec![
+                    Message::BulkString(BulkString {
+                        length: 8,
+                        string: "REPLCONF".to_string(),
+                    }),
+                    Message::BulkString(BulkString {
+                        length: 3,
+                        string: "ACK".to_string(),
+                    }),
+                    Message::BulkString(BulkString {
+                        length: offset.to_string().len() as isize,
+                        string: offset.to_string(),
+                    }),
+                ],
+            })));
+        }
+    }
+
+    Ok(Some(Message::SimpleString(SimpleString {
+        string: "OK".to_string(),
+    })))
+}
+
+pub async fn psync(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
+    // This will be handled specially in the connection handler
+    // because it needs to send RDB file
+    Ok(None)
+}
+
+pub async fn wait(
+    ctx: &CommandContext,
+    args: &[String],
+    message: &Message,
+) -> Result<Option<Message>> {
+    if args.len() < 2 {
+        return Ok(Some(Message::SimpleError(SimpleError {
+            string: "ERR wrong number of arguments for 'wait' command".to_string(),
+        })));
+    }
+
+    let numreplicas: usize = args[0].parse()?;
+    let timeout_ms: u64 = args[1].parse()?;
+
+    let mut repl = ctx.server.replication.write().await;
+
+    // Check if there are no writes to wait for
+    if repl.expected_offset == 0 || repl.acked_replica_count >= repl.total_replica_count {
+        let count = repl.total_replica_count;
+        drop(repl);
+        return Ok(Some(Message::Integer(Integer {
+            value: count as i64,
+        })));
+    }
+
+    // Send GETACK to all replicas (this should be done via broadcast)
+    // For now, just wait
+    let wait_notify = repl.wait_notify.clone();
+    drop(repl);
+
+    let start = Instant::now();
+    let timeout_duration = Duration::from_millis(timeout_ms);
+
+    loop {
+        let repl = ctx.server.replication.read().await;
+        if repl.acked_replica_count >= numreplicas {
+            let count = repl.acked_replica_count;
+            drop(repl);
+            return Ok(Some(Message::Integer(Integer {
+                value: count as i64,
+            })));
+        }
+        drop(repl);
+
+        let remaining = timeout_duration
+            .checked_sub(start.elapsed())
+            .unwrap_or(Duration::ZERO);
+
+        if remaining.is_zero() {
+            let repl = ctx.server.replication.read().await;
+            return Ok(Some(Message::Integer(Integer {
+                value: repl.acked_replica_count as i64,
+            })));
+        }
+
+        if timeout(remaining, wait_notify.notified()).await.is_err() {
+            let repl = ctx.server.replication.read().await;
+            return Ok(Some(Message::Integer(Integer {
+                value: repl.acked_replica_count as i64,
+            })));
+        }
+    }
+}
+
+pub async fn command(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
+    Ok(Some(Message::SimpleString(SimpleString {
+        string: "OK".to_string(),
+    })))
+}

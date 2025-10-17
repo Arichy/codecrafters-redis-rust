@@ -1,9 +1,16 @@
 use anyhow::Context;
 use bytes::{Buf, Bytes, BytesMut};
+use std::sync::Arc;
 use thiserror::Error;
+use tokio::sync::Mutex;
 use tokio_util::codec::{Decoder, Encoder};
+use futures_util::stream::SplitSink;
+use tokio::net::TcpStream;
+use tokio_util::codec::Framed;
 
 use crate::rdb::RDB;
+
+pub type MessageWriter = Arc<Mutex<SplitSink<Framed<TcpStream, MessageFramer>, Message>>>;
 
 #[derive(Debug, Clone)]
 pub enum Message {

@@ -1,233 +1,102 @@
-use std::sync::Arc;
 use anyhow::Result;
-use tokio::sync::{broadcast, RwLock, Mutex};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
-use crate::connection::{MessageReader, MessageWriter};
-use crate::message::{Message, Array, BulkString, SimpleString, SimpleError, Integer};
-use crate::store::Store;
-use crate::server::Config;
-use crate::replication::{ReplicationInfo, ReplicationState};
-use crate::pubsub::PubSubManager;
-use crate::blocking::BlockingCommandManager;
+use crate::message::Message;
+use crate::server::Server;
 
-pub mod ping;
-pub mod echo;
-pub mod get;
-pub mod set;
-pub mod info;
-pub mod config;
-pub mod keys;
-pub mod incr;
-pub mod type_cmd;
-pub mod xadd;
-pub mod xrange;
-pub mod xread;
-pub mod rpush;
-pub mod lpush;
-pub mod lrange;
-pub mod llen;
-pub mod lpop;
-pub mod blpop;
-pub mod subscribe;
-pub mod unsubscribe;
-pub mod publish;
-pub mod zadd;
-pub mod zrank;
-pub mod zrange;
-pub mod zcard;
-pub mod zscore;
-pub mod zrem;
-pub mod psync;
-pub mod replconf;
-pub mod wait_cmd;
+pub mod string;
+pub mod list;
+pub mod stream;
+pub mod sorted_set;
+pub mod pubsub;
+pub mod server_cmds;
+pub mod transaction;
 
-#[derive(Debug, Clone)]
-pub struct CommandMessage {
-    pub peer_addr: String,
-    pub message: Message,
-}
-
+/// Context for command execution
 pub struct CommandContext {
-    pub config: Arc<RwLock<Config>>,
-    pub store: Arc<Store>,
-    pub replication_info: Arc<ReplicationInfo>,
-    pub replication_state: Arc<Mutex<ReplicationState>>,
-    pub pubsub_manager: Arc<PubSubManager>,
-    pub blocking_manager: Arc<BlockingCommandManager>,
-    pub command_tx: broadcast::Sender<CommandMessage>,
-    pub selected_db_index: Arc<RwLock<usize>>,
-    pub message_reader: MessageReader,
-    pub message_writer: MessageWriter,
-    pub peer_addr: String,
+    pub server: Server,
+    pub client_id: String,
+    pub selected_db: Arc<RwLock<usize>>,
     pub is_slave: bool,
 }
 
-pub struct CommandDispatcher {
-    config: Arc<RwLock<Config>>,
-    store: Arc<Store>,
-    replication_info: Arc<ReplicationInfo>,
-    replication_state: Arc<Mutex<ReplicationState>>,
-    pubsub_manager: Arc<PubSubManager>,
-    blocking_manager: Arc<BlockingCommandManager>,
-    command_tx: broadcast::Sender<CommandMessage>,
-    selected_db_index: Arc<RwLock<usize>>,
-}
-
-impl CommandDispatcher {
-    pub fn new(
-        config: Arc<RwLock<Config>>,
-        store: Arc<Store>,
-        replication_info: Arc<ReplicationInfo>,
-        replication_state: Arc<Mutex<ReplicationState>>,
-        pubsub_manager: Arc<PubSubManager>,
-        blocking_manager: Arc<BlockingCommandManager>,
-        command_tx: broadcast::Sender<CommandMessage>,
-        selected_db_index: Arc<RwLock<usize>>,
-    ) -> Self {
-        Self {
-            config,
-            store,
-            replication_info,
-            replication_state,
-            pubsub_manager,
-            blocking_manager,
-            command_tx,
-            selected_db_index,
-        }
-    }
-    
-    pub async fn dispatch(
-        &self,
-        message: Message,
-        message_reader: MessageReader,
-        message_writer: MessageWriter,
-        peer_addr: String,
-        is_slave: bool,
-    ) -> Result<Option<Message>> {
-        let commands = parse_message(&message);
-        
-        if commands.is_empty() {
-            return Ok(None);
-        }
-        
-        let cmd = commands[0].to_lowercase();
-        let params = &commands[1..];
-        
-        let context = CommandContext {
-            config: Arc::clone(&self.config),
-            store: Arc::clone(&self.store),
-            replication_info: Arc::clone(&self.replication_info),
-            replication_state: Arc::clone(&self.replication_state),
-            pubsub_manager: Arc::clone(&self.pubsub_manager),
-            blocking_manager: Arc::clone(&self.blocking_manager),
-            command_tx: self.command_tx.clone(),
-            selected_db_index: Arc::clone(&self.selected_db_index),
-            message_reader,
-            message_writer,
-            peer_addr: peer_addr.clone(),
-            is_slave,
-        };
-        
-        // Check if client is in pub/sub mode
-        if self.pubsub_manager.is_subscribed(&peer_addr).await {
-            static ALLOWED_IN_PUBSUB: &[&str] = &[
-                "subscribe", "unsubscribe", "psubscribe", "punsubscribe", "ping", "quit"
-            ];
-            
-            if !ALLOWED_IN_PUBSUB.contains(&cmd.as_str()) {
-                return Ok(Some(Message::SimpleError(SimpleError {
-                    string: format!("ERR Can't execute '{}' in subscribed mode", cmd),
-                })));
-            }
-        }
-        
-
-        
-        // Dispatch to appropriate command handler
-        let result = match cmd.as_str() {
-            "ping" => ping::handle(params, &context).await,
-            "echo" => echo::handle(params, &context).await,
-            "get" => get::handle(params, &context).await,
-            "set" => set::handle(params, &context).await,
-            "info" => info::handle(params, &context).await,
-            "config" => config::handle(params, &context).await,
-            "keys" => keys::handle(params, &context).await,
-            "incr" => incr::handle(params, &context).await,
-            "type" => type_cmd::handle(params, &context).await,
-            "xadd" => xadd::handle(params, &context).await,
-            "xrange" => xrange::handle(params, &context).await,
-            "xread" => xread::handle(params, &context).await,
-            "rpush" => rpush::handle(params, &context).await,
-            "lpush" => lpush::handle(params, &context).await,
-            "lrange" => lrange::handle(params, &context).await,
-            "llen" => llen::handle(params, &context).await,
-            "lpop" => lpop::handle(params, &context).await,
-            "blpop" => blpop::handle(params, &context).await,
-            "subscribe" => subscribe::handle(params, &context).await,
-            "unsubscribe" => unsubscribe::handle(params, &context).await,
-            "publish" => publish::handle(params, &context).await,
-            "zadd" => zadd::handle(params, &context).await,
-            "zrank" => zrank::handle(params, &context).await,
-            "zrange" => zrange::handle(params, &context).await,
-            "zcard" => zcard::handle(params, &context).await,
-            "zscore" => zscore::handle(params, &context).await,
-            "zrem" => zrem::handle(params, &context).await,
-            "psync" => psync::handle(params, &context).await,
-            "replconf" => replconf::handle(params, &context).await,
-            "wait" => wait_cmd::handle(params, &context).await,
-            _ => Ok(None),
-        };
-        
-        // Propagate write commands to slaves if we're master
-        if !is_slave && result.is_ok() {
-            // Check if this is a write command
-            let is_write_command = matches!(cmd.as_str(), 
-                "set" | "del" | "incr" | "rpush" | "lpush" | "lpop" | 
-                "xadd" | "zadd" | "zrem" | "sadd" | "srem"
-            );
-            
-            if is_write_command {
-                // Update master's replication offset
-                let message_length = message.length()?;
-                {
-                    let mut state = self.replication_state.lock().await;
-                    state.offset += message_length;
-                }
-                
-                // Broadcast the command to all replicas
-                let _ = self.command_tx.send(CommandMessage {
-                    message: message.clone(),
-                    peer_addr: peer_addr.to_string(),
-                });
-            }
-        }
-        
-        result
-    }
-}
-
-fn parse_message(message: &Message) -> Vec<&str> {
+/// Parse command from message
+pub fn parse_command(message: &Message) -> Option<(String, Vec<String>)> {
     match message {
-        Message::Array(Array { items }) => items
-            .iter()
-            .filter_map(|item| match item {
-                Message::BulkString(BulkString { string, .. }) => Some(string.as_str()),
-                _ => None,
-            })
-            .collect(),
-        _ => vec![],
+        Message::Array(arr) => {
+            if arr.items.is_empty() {
+                return None;
+            }
+            let mut parts = Vec::new();
+            for item in &arr.items {
+                if let Message::BulkString(bs) = item {
+                    parts.push(bs.string.clone());
+                }
+            }
+            if parts.is_empty() {
+                return None;
+            }
+            let cmd = parts[0].to_lowercase();
+            let args = parts[1..].to_vec();
+            Some((cmd, args))
+        }
+        _ => None,
     }
 }
 
-// Helper macro for parameter validation
-#[macro_export]
-macro_rules! get_param {
-    ($index:expr, $params:expr, $cmd_name:expr) => {{
-        let Some(value) = $params.get($index) else {
-            return Ok(Some(Message::SimpleError(SimpleError {
-                string: format!("{} requires more arguments", $cmd_name),
-            })));
-        };
-        value
-    }};
+/// Execute a command
+pub async fn execute(
+    ctx: &CommandContext,
+    cmd: &str,
+    args: &[String],
+    message: &Message,
+) -> Result<Option<Message>> {
+    match cmd {
+        // String commands
+        "ping" => server_cmds::ping(ctx, args).await,
+        "echo" => server_cmds::echo(ctx, args).await,
+        "get" => string::get(ctx, args).await,
+        "set" => string::set(ctx, args, message).await,
+        "incr" => string::incr(ctx, args).await,
+
+        // List commands
+        "lpush" => list::lpush(ctx, args, message).await,
+        "rpush" => list::rpush(ctx, args, message).await,
+        "lpop" => list::lpop(ctx, args).await,
+        "llen" => list::llen(ctx, args).await,
+        "lrange" => list::lrange(ctx, args).await,
+        "blpop" => list::blpop(ctx, args).await,
+
+        // Stream commands
+        "xadd" => stream::xadd(ctx, args, message).await,
+        "xrange" => stream::xrange(ctx, args).await,
+        "xread" => stream::xread(ctx, args).await,
+
+        // Sorted set commands
+        "zadd" => sorted_set::zadd(ctx, args).await,
+        "zrange" => sorted_set::zrange(ctx, args).await,
+        "zrank" => sorted_set::zrank(ctx, args).await,
+        "zcard" => sorted_set::zcard(ctx, args).await,
+        "zscore" => sorted_set::zscore(ctx, args).await,
+        "zrem" => sorted_set::zrem(ctx, args).await,
+
+        // Pub/Sub commands
+        "subscribe" => pubsub::subscribe(ctx, args).await,
+        "unsubscribe" => pubsub::unsubscribe(ctx, args).await,
+        "publish" => pubsub::publish(ctx, args).await,
+
+        // Server commands
+        "info" => server_cmds::info(ctx, args).await,
+        "config" => server_cmds::config(ctx, args).await,
+        "keys" => server_cmds::keys(ctx, args).await,
+        "type" => server_cmds::type_cmd(ctx, args).await,
+        "replconf" => server_cmds::replconf(ctx, args, message).await,
+        "psync" => server_cmds::psync(ctx, args).await,
+        "wait" => server_cmds::wait(ctx, args, message).await,
+        "command" => server_cmds::command(ctx, args).await,
+
+        // Transaction commands are handled at a higher level
+        _ => Ok(None),
+    }
 }
