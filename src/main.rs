@@ -134,6 +134,164 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Helper function to send a response message to the client
+async fn send_response(
+    writer: &MessageWriter,
+    message: Message,
+) -> Result<()> {
+    let mut writer_locked = writer.lock().await;
+    writer_locked.send(message).await?;
+    Ok(())
+}
+
+/// Helper function to send a simple string response
+async fn send_ok(writer: &MessageWriter) -> Result<()> {
+    send_response(writer, Message::SimpleString(SimpleString {
+        string: "OK".to_string(),
+    }))
+    .await
+}
+
+/// Helper function to send a simple error response
+async fn send_error(writer: &MessageWriter, error: String) -> Result<()> {
+    send_response(writer, Message::SimpleError(SimpleError { string: error })).await
+}
+
+/// Handle MULTI command
+async fn handle_multi(
+    writer: &MessageWriter,
+    in_transaction: &mut bool,
+    transaction_queue: &mut VecDeque<Message>,
+) -> Result<()> {
+    *in_transaction = true;
+    transaction_queue.clear();
+    send_ok(writer).await
+}
+
+/// Handle DISCARD command
+async fn handle_discard(
+    writer: &MessageWriter,
+    in_transaction: &mut bool,
+    transaction_queue: &mut VecDeque<Message>,
+) -> Result<()> {
+    if !*in_transaction {
+        return send_error(writer, "ERR DISCARD without MULTI".to_string()).await;
+    }
+    transaction_queue.clear();
+    *in_transaction = false;
+    send_ok(writer).await
+}
+
+/// Handle EXEC command
+async fn handle_exec(
+    writer: &MessageWriter,
+    in_transaction: &mut bool,
+    transaction_queue: &mut VecDeque<Message>,
+    server: &Server,
+    peer_addr: &str,
+    selected_db: &Arc<RwLock<usize>>,
+    is_slave: bool,
+) -> Result<()> {
+    if !*in_transaction {
+        return send_error(writer, "ERR EXEC without MULTI".to_string()).await;
+    }
+
+    let mut results = Vec::new();
+    for queued_msg in transaction_queue.drain(..) {
+        if let Some((cmd, args)) = commands::parse_command(&queued_msg) {
+            let ctx = CommandContext {
+                server: server.clone(),
+                client_id: peer_addr.to_string(),
+                selected_db: Arc::clone(selected_db),
+                is_slave,
+            };
+            if let Ok(Some(result)) = commands::execute(&ctx, &cmd, &args, &queued_msg).await {
+                results.push(result);
+            }
+        }
+    }
+
+    *in_transaction = false;
+    send_response(writer, Message::Array(Array { items: results })).await
+}
+
+/// Handle subscribe mode command filtering
+async fn check_subscribe_mode(
+    server: &Server,
+    writer: &MessageWriter,
+    peer_addr: &str,
+    cmd: &str,
+) -> Result<bool> {
+    let in_subscribe_mode = server.pubsub.is_subscribed(peer_addr).await;
+    if in_subscribe_mode {
+        let allowed = ["subscribe", "unsubscribe", "psubscribe", "punsubscribe", "ping", "quit"];
+        if !allowed.contains(&cmd) {
+            send_error(
+                writer,
+                format!("ERR Can't execute '{}' in subscribed mode", cmd),
+            )
+            .await?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Handle PSYNC command (replication)
+async fn handle_psync(
+    writer: &MessageWriter,
+    server: &Server,
+) -> Result<()> {
+    let repl = server.replication.read().await;
+    let fullresync = format!("FULLRESYNC {} {}", repl.master_replid, repl.master_repl_offset);
+    drop(repl);
+
+    send_response(
+        writer,
+        Message::SimpleString(SimpleString {
+            string: fullresync,
+        }),
+    )
+    .await?;
+
+    let rdb = server.rdb.read().await;
+    send_response(writer, Message::RDB(rdb.clone())).await?;
+    drop(rdb);
+
+    // Add this replica to the count
+    let mut repl = server.replication.write().await;
+    repl.total_replica_count += 1;
+    repl.acked_replica_count += 1;
+
+    Ok(())
+}
+
+/// Handle SUBSCRIBE command
+async fn handle_subscribe(
+    writer: &MessageWriter,
+    server: &Server,
+    peer_addr: &str,
+    channel: &str,
+) -> Result<()> {
+    server
+        .pubsub
+        .subscribe(peer_addr.to_string(), channel.to_string(), Arc::clone(writer))
+        .await;
+
+    let channels = server.pubsub.get_client_channels(peer_addr).await;
+    send_response(
+        writer,
+        Message::new_array(vec![
+            Message::new_bulk_string("subscribe".to_string()),
+            Message::new_bulk_string(channel.to_string()),
+            Message::Integer(Integer {
+                value: channels.len() as i64,
+            }),
+        ]),
+    )
+    .await
+}
+
 async fn handle_client(
     stream: TcpStream,
     server: Server,
@@ -182,85 +340,31 @@ async fn handle_client(
         };
 
         // Check if in subscribe mode
-        let in_subscribe_mode = server.pubsub.is_subscribed(&peer_addr).await;
-        if in_subscribe_mode {
-            let allowed = ["subscribe", "unsubscribe", "psubscribe", "punsubscribe", "ping", "quit"];
-            if !allowed.contains(&cmd.as_str()) {
-                let mut writer_locked = writer.lock().await;
-                writer_locked
-                    .send(Message::SimpleError(SimpleError {
-                        string: format!("ERR Can't execute '{}' in subscribed mode", cmd),
-                    }))
-                    .await?;
-                continue;
-            }
+        if check_subscribe_mode(&server, &writer, &peer_addr, &cmd).await? {
+            continue;
         }
 
         // Handle transaction commands
         match cmd.as_str() {
             "multi" => {
-                in_transaction = true;
-                transaction_queue.clear();
-                let mut writer_locked = writer.lock().await;
-                writer_locked
-                    .send(Message::SimpleString(SimpleString {
-                        string: "OK".to_string(),
-                    }))
-                    .await?;
+                handle_multi(&writer, &mut in_transaction, &mut transaction_queue).await?;
                 continue;
             }
             "exec" => {
-                if !in_transaction {
-                    let mut writer_locked = writer.lock().await;
-                    writer_locked
-                        .send(Message::SimpleError(SimpleError {
-                            string: "ERR EXEC without MULTI".to_string(),
-                        }))
-                        .await?;
-                    continue;
-                }
-
-                let mut results = Vec::new();
-                for queued_msg in transaction_queue.drain(..) {
-                    if let Some((cmd, args)) = commands::parse_command(&queued_msg) {
-                        let ctx = CommandContext {
-                            server: server.clone(),
-                            client_id: peer_addr.clone(),
-                            selected_db: Arc::clone(&selected_db),
-                            is_slave,
-                        };
-                        if let Ok(Some(result)) = commands::execute(&ctx, &cmd, &args, &queued_msg).await {
-                            results.push(result);
-                        }
-                    }
-                }
-
-                let mut writer_locked = writer.lock().await;
-                writer_locked
-                    .send(Message::Array(Array { items: results }))
-                    .await?;
-                in_transaction = false;
+                handle_exec(
+                    &writer,
+                    &mut in_transaction,
+                    &mut transaction_queue,
+                    &server,
+                    &peer_addr,
+                    &selected_db,
+                    is_slave,
+                )
+                .await?;
                 continue;
             }
             "discard" => {
-                if !in_transaction {
-                    let mut writer_locked = writer.lock().await;
-                    writer_locked
-                        .send(Message::SimpleError(SimpleError {
-                            string: "ERR DISCARD without MULTI".to_string(),
-                        }))
-                        .await?;
-                    continue;
-                }
-
-                transaction_queue.clear();
-                in_transaction = false;
-                let mut writer_locked = writer.lock().await;
-                writer_locked
-                    .send(Message::SimpleString(SimpleString {
-                        string: "OK".to_string(),
-                    }))
-                    .await?;
+                handle_discard(&writer, &mut in_transaction, &mut transaction_queue).await?;
                 continue;
             }
             _ => {}
@@ -269,65 +373,23 @@ async fn handle_client(
         // If in transaction, queue the command
         if in_transaction {
             transaction_queue.push_back(message.clone());
-            let mut writer_locked = writer.lock().await;
-            writer_locked
-                .send(Message::SimpleString(SimpleString {
-                    string: "QUEUED".to_string(),
-                }))
-                .await?;
+            send_response(&writer, Message::SimpleString(SimpleString {
+                string: "QUEUED".to_string(),
+            }))
+            .await?;
             continue;
         }
 
         // Special handling for PSYNC (replication)
         if cmd == "psync" {
-            let repl = server.replication.read().await;
-            let fullresync = format!("FULLRESYNC {} {}", repl.master_replid, repl.master_repl_offset);
-            drop(repl);
-
-            let mut writer_locked = writer.lock().await;
-            writer_locked
-                .send(Message::SimpleString(SimpleString {
-                    string: fullresync,
-                }))
-                .await?;
-
-            let rdb = server.rdb.read().await;
-            writer_locked.send(Message::RDB(rdb.clone())).await?;
-            drop(rdb);
-            drop(writer_locked);
-
-            // Add this replica to the count
-            {
-                let mut repl = server.replication.write().await;
-                repl.total_replica_count += 1;
-                repl.acked_replica_count += 1;
-            }
-
-            // Start listening for replication commands
-            // This connection now becomes a replication handler
-            // For simplicity, we'll continue in the same loop
+            handle_psync(&writer, &server).await?;
             continue;
         }
 
         // Special handling for SUBSCRIBE
         if cmd == "subscribe" && !args_vec.is_empty() {
             let channel = &args_vec[0];
-            server
-                .pubsub
-                .subscribe(peer_addr.clone(), channel.clone(), Arc::clone(&writer))
-                .await;
-
-            let channels = server.pubsub.get_client_channels(&peer_addr).await;
-            let mut writer_locked = writer.lock().await;
-            writer_locked
-                .send(Message::new_array(vec![
-                    Message::new_bulk_string("subscribe".to_string()),
-                    Message::new_bulk_string(channel.clone()),
-                    Message::Integer(Integer {
-                        value: channels.len() as i64,
-                    }),
-                ]))
-                .await?;
+            handle_subscribe(&writer, &server, &peer_addr, channel).await?;
             continue;
         }
 
@@ -341,20 +403,14 @@ async fn handle_client(
 
         match commands::execute(&ctx, &cmd, &args_vec, &message).await {
             Ok(Some(response)) => {
-                let mut writer_locked = writer.lock().await;
-                writer_locked.send(response).await?;
+                send_response(&writer, response).await?;
             }
             Ok(None) => {
                 // No response needed (e.g., slave processing SET)
             }
             Err(e) => {
                 eprintln!("Command error: {}", e);
-                let mut writer_locked = writer.lock().await;
-                writer_locked
-                    .send(Message::SimpleError(SimpleError {
-                        string: format!("ERR {}", e),
-                    }))
-                    .await?;
+                send_error(&writer, format!("{}", e)).await?;
             }
         }
     }

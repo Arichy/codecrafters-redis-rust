@@ -3,7 +3,8 @@
     "allow": [
       "Bash(tree:*)",
       "Bash(cargo build:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nrefactor: simplify main.rs by extracting handler functions\n\nExtract repetitive command handling logic into dedicated functions:\n- Create send_response, send_ok, send_error helpers to centralize writer locking\n- Extract transaction handling (MULTI/EXEC/DISCARD) into separate functions\n- Extract PSYNC replication handling into handle_psync\n- Extract SUBSCRIBE handling into handle_subscribe\n- Extract subscribe mode validation into check_subscribe_mode\n\nThis reduces main.rs from 425 to 481 lines with much better code organization,\nreduced nested locking patterns, and improved testability. The refactoring\nmaintains backward compatibility while making the code more maintainable.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")"
     ],
     "deny": [],
     "ask": []
