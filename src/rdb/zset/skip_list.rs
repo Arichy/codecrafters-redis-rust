@@ -338,14 +338,14 @@ impl<T: Default + PartialEq + PartialOrd + fmt::Debug + fmt::Display> SkipList<T
                 unsafe {
                     let mut next_ptr = (*update.as_ptr()).next(i).unwrap();
                     if (*next_ptr).key() == delete_key {
-                        (*update.as_ptr()).forward[i] = Some(ForwardPtr {
+                        (&mut (*update.as_ptr()).forward)[i] = Some(ForwardPtr {
                             ptr: (*next_ptr).forward[i].unwrap().ptr,
-                            span: (*update.as_ptr()).forward[i].unwrap().span
+                            span: (&(*update.as_ptr()).forward)[i].unwrap().span
                                 + (*next_ptr).forward[i].unwrap().span
                                 - 1,
                         });
                     } else {
-                        (*update.as_ptr()).forward[i].as_mut().unwrap().span -= 1;
+                        (&mut (*update.as_ptr()).forward)[i].as_mut().unwrap().span -= 1;
                     }
                 }
             }
@@ -355,7 +355,7 @@ impl<T: Default + PartialEq + PartialOrd + fmt::Debug + fmt::Display> SkipList<T
             }
 
             while self.level > 0 && {
-                let head_next = unsafe { (*self.head.as_ptr()).forward[self.level].unwrap() };
+                let head_next = unsafe { (&(*self.head.as_ptr()).forward)[self.level].unwrap() };
 
                 head_next.ptr == self.tail
             } {
