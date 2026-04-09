@@ -6,14 +6,14 @@ use tokio::sync::RwLock;
 use crate::message::Message;
 use crate::server::Server;
 
-pub mod string;
+pub mod geo;
 pub mod list;
-pub mod stream;
-pub mod sorted_set;
 pub mod pubsub;
 pub mod server_cmds;
+pub mod sorted_set;
+pub mod stream;
+pub mod string;
 pub mod transaction;
-pub mod geo;
 
 /// Server configuration (read-only, shared via Arc)
 #[derive(Debug)]
@@ -111,6 +111,7 @@ pub async fn execute(
         // Geo commands
         "geoadd" => geo::add(ctx, args).await,
         "geopos" => geo::pos(ctx, args).await,
+        "geodist" => geo::distance(ctx, args).await,
         _ => Ok(None),
     }
 }

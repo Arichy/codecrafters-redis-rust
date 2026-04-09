@@ -1,6 +1,9 @@
 use crate::{
     commands::{
-        geo::{decode::decode, encode::encode},
+        geo::{
+            decode::{decode, Coordinates},
+            encode::encode,
+        },
         sorted_set::{zadd, zscore},
         CommandContext,
     },
@@ -10,6 +13,7 @@ use crate::{
 use anyhow::{Context as AnyhowContext, Result};
 
 mod decode;
+mod distance;
 mod encode;
 
 pub async fn add(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -80,4 +84,72 @@ pub async fn pos(ctx: &CommandContext, args: &[String]) -> Result<Option<Message
     }
 
     Ok(Some(Message::Array(Array { items })))
+}
+
+pub async fn distance(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
+    let key = &args[0];
+    let member1 = &args[1];
+    let member2 = &args[2];
+
+    let res = pos(ctx, args).await?.expect("Cannot be None.");
+    let Message::Array(Array { mut items }) = res else {
+        unreachable!();
+    };
+
+    let first = items.pop().unwrap();
+    let second = items.pop().unwrap();
+
+    let Message::Array(Array { items: co1 }) = first else {
+        return Ok(Some(Message::NullArray));
+    };
+    let Message::Array(Array { items: co2 }) = second else {
+        return Ok(Some(Message::NullArray));
+    };
+
+    let Message::BulkString(BulkString {
+        length,
+        string: lo1_str,
+    }) = &co1[0]
+    else {
+        unreachable!()
+    };
+    let Message::BulkString(BulkString {
+        length,
+        string: la1_str,
+    }) = &co1[1]
+    else {
+        unreachable!()
+    };
+
+    let Message::BulkString(BulkString {
+        length,
+        string: lo2_str,
+    }) = &co2[0]
+    else {
+        unreachable!()
+    };
+    let Message::BulkString(BulkString {
+        length,
+        string: la2_str,
+    }) = &co2[1]
+    else {
+        unreachable!()
+    };
+
+    let dist = distance::haversine(
+        Coordinates {
+            latitude: la1_str.parse()?,
+            longitude: lo1_str.parse()?,
+        },
+        Coordinates {
+            latitude: la2_str.parse()?,
+            longitude: lo2_str.parse()?,
+        },
+    );
+
+    let dist_str = dist.to_string();
+    Ok(Some(Message::BulkString(BulkString {
+        length: dist_str.len() as isize,
+        string: dist_str,
+    })))
 }
