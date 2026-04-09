@@ -215,7 +215,11 @@ pub async fn blpop(ctx: &CommandContext, args: &[String]) -> Result<Option<Messa
     let key = &args[0];
     let timeout_secs = args[1].parse::<f64>()?;
 
-    // First, try to pop immediately
+    // Register waiter FIRST to avoid race condition
+    // (RPUSH could happen between checking and registering)
+    let notify = ctx.server.blocking.register_list_waiter(key.clone()).await;
+
+    // Then check if list already has elements
     {
         let mut rdb = ctx.server.rdb.write().await;
         let db_index = *ctx.selected_db.read().await;
@@ -225,6 +229,8 @@ pub async fn blpop(ctx: &CommandContext, args: &[String]) -> Result<Option<Messa
             if let ValueType::ListValue(list_value) = &value.value {
                 if !list_value.list.is_empty() {
                     // List has elements, pop immediately
+                    // Remove our waiter since we're not waiting anymore
+                    ctx.server.blocking.remove_list_waiter(key, &notify).await;
                     let result = lpop_internal(db, key, 1);
                     return Ok(Some(Message::Array(Array {
                         items: vec![
@@ -240,10 +246,7 @@ pub async fn blpop(ctx: &CommandContext, args: &[String]) -> Result<Option<Messa
         }
     }
 
-    // List is empty, need to block
-    let notify = ctx.server.blocking.register_list_waiter(key.clone()).await;
-
-    // Wait for notification or timeout
+    // List is empty, wait for notification or timeout
     let wait_result = if timeout_secs == 0.0 {
         // Block indefinitely
         notify.notified().await;
@@ -280,7 +283,8 @@ pub async fn blpop(ctx: &CommandContext, args: &[String]) -> Result<Option<Messa
             }
         }
         Err(_) => {
-            // Timeout
+            // Timeout - clean up our waiter so RPUSH doesn't notify a dead waiter
+            ctx.server.blocking.remove_list_waiter(key, &notify).await;
             Ok(Some(Message::NullArray))
         }
     }
