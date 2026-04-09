@@ -30,10 +30,9 @@ cargo build --release --target-dir=/tmp/codecrafters-build-redis-rust
 ./your_program.sh --dir /tmp/redis-data --dbfilename dump.rdb
 ```
 
-**Submit to CodeCrafters:**
+**Test with CodeCrafters:**
 ```bash
-git commit -am "your message"
-git push origin master
+codecrafters test
 ```
 
 ## Architecture

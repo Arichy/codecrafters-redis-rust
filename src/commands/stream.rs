@@ -1,13 +1,19 @@
 use anyhow::Result;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Notify;
 use tokio::time::timeout;
 
 use crate::commands::CommandContext;
 use crate::message::{Array, BulkString, Message, SimpleError};
 use crate::rdb::{StreamId, StreamValue, Value, ValueType};
 
-pub async fn xadd(ctx: &CommandContext, args: &[String], message: &Message) -> Result<Option<Message>> {
+pub async fn xadd(
+    ctx: &CommandContext,
+    args: &[String],
+    message: &Message,
+) -> Result<Option<Message>> {
     if args.len() < 4 {
         return Ok(Some(Message::SimpleError(SimpleError {
             string: "ERR wrong number of arguments for 'xadd' command".to_string(),
@@ -94,7 +100,8 @@ pub async fn xadd(ctx: &CommandContext, args: &[String], message: &Message) -> R
         }
         _ => {
             return Ok(Some(Message::SimpleError(SimpleError {
-                string: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                string: "WRONGTYPE Operation against a key holding the wrong kind of value"
+                    .to_string(),
             })));
         }
     }
@@ -104,13 +111,15 @@ pub async fn xadd(ctx: &CommandContext, args: &[String], message: &Message) -> R
     // Notify all waiting XREAD clients for this key
     ctx.server.blocking.notify_stream_key(key).await;
 
-    // Update replication offset if this is a master
+    // Update replication offset and broadcast to replicas if this is a master
     if !ctx.is_slave {
         let mut repl = ctx.server.replication.write().await;
         if repl.is_master() {
             repl.acked_replica_count = 0;
             repl.expected_offset += message.length()?;
         }
+        drop(repl);
+        ctx.server.replicas.broadcast(message).await;
     }
 
     if ctx.is_slave {
@@ -249,29 +258,36 @@ pub async fn xread(ctx: &CommandContext, args: &[String]) -> Result<Option<Messa
         }
 
         // No data, need to block
-        let mut notifies = Vec::new();
+        // Create a single shared Notify for all stream keys
+        let shared_notify = Arc::new(Notify::new());
+        let mut notifies: Vec<(String, Arc<Notify>)> = Vec::new();
         for key in keys {
-            let notify = ctx.server.blocking.register_stream_waiter(key.to_string()).await;
-            notifies.push((key.to_string(), notify));
+            ctx.server
+                .blocking
+                .register_stream_waiter_with_notify(key.to_string(), Arc::clone(&shared_notify))
+                .await;
+            notifies.push((key.to_string(), Arc::clone(&shared_notify)));
         }
 
         // Wait for notification or timeout
         let wait_result = if block_ms == 0 {
-            // Wait indefinitely for any key
             tokio::select! {
-                _ = notifies[0].1.notified() => Ok(()),
+                _ = shared_notify.notified() => Ok(()),
             }
         } else {
-            timeout(
-                Duration::from_millis(block_ms),
-                notifies[0].1.notified(),
-            )
-            .await
+            let timeout_dur = Duration::from_millis(block_ms);
+            match timeout(timeout_dur, shared_notify.notified()).await {
+                Ok(()) => Ok(()),
+                Err(_) => Err(()),
+            }
         };
 
         // Clean up waiters
         for (key, notify) in notifies {
-            ctx.server.blocking.remove_stream_waiter(&key, &notify).await;
+            ctx.server
+                .blocking
+                .remove_stream_waiter(&key, &notify)
+                .await;
         }
 
         match wait_result {
@@ -282,10 +298,7 @@ pub async fn xread(ctx: &CommandContext, args: &[String]) -> Result<Option<Messa
             }
             Err(_) => {
                 // Timeout
-                Ok(Some(Message::BulkString(BulkString {
-                    length: -1,
-                    string: String::new(),
-                })))
+                Ok(Some(Message::NullArray))
             }
         }
     } else {

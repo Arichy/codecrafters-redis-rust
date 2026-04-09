@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify, RwLock};
 
-use crate::message::MessageWriter;
+use crate::message::{Message, MessageWriter};
 use crate::rdb::RDB;
+use futures_util::SinkExt;
 
 /// Core server state that manages all shared resources
 #[derive(Clone)]
@@ -16,6 +17,8 @@ pub struct Server {
     pub pubsub: Arc<PubSubManager>,
     /// Replication state
     pub replication: Arc<RwLock<ReplicationState>>,
+    /// Replica connection manager
+    pub replicas: Arc<ReplicaManager>,
 }
 
 impl Server {
@@ -25,6 +28,7 @@ impl Server {
             blocking: Arc::new(BlockingManager::new()),
             pubsub: Arc::new(PubSubManager::new()),
             replication: Arc::new(RwLock::new(replication_state)),
+            replicas: Arc::new(ReplicaManager::new()),
         }
     }
 }
@@ -75,6 +79,12 @@ impl BlockingManager {
         let mut waiters = self.stream_waiters.lock().await;
         waiters.entry(key).or_insert_with(Vec::new).push(notify.clone());
         notify
+    }
+
+    /// Register a client-provided Notify on a stream key (for multi-stream XREAD)
+    pub async fn register_stream_waiter_with_notify(&self, key: String, notify: Arc<Notify>) {
+        let mut waiters = self.stream_waiters.lock().await;
+        waiters.entry(key).or_insert_with(Vec::new).push(notify);
     }
 
     /// Notify ALL clients waiting for a stream key
@@ -250,5 +260,40 @@ impl ReplicationState {
 
     pub fn is_slave(&self) -> bool {
         matches!(self.role, Role::Slave(_))
+    }
+}
+
+/// Manages replica connections for command propagation
+pub struct ReplicaManager {
+    /// peer_addr -> MessageWriter for each connected replica
+    writers: Mutex<HashMap<String, MessageWriter>>,
+}
+
+impl ReplicaManager {
+    pub fn new() -> Self {
+        Self {
+            writers: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub async fn register(&self, peer_addr: String, writer: MessageWriter) {
+        self.writers.lock().await.insert(peer_addr, writer);
+    }
+
+    pub async fn unregister(&self, peer_addr: &str) {
+        self.writers.lock().await.remove(peer_addr);
+    }
+
+    /// Send a message to all replicas, returning the count
+    pub async fn broadcast(&self, message: &Message) -> usize {
+        let writers = self.writers.lock().await;
+        let mut count = 0;
+        for writer in writers.values() {
+            let mut w = writer.lock().await;
+            if w.send(message.clone()).await.is_ok() {
+                count += 1;
+            }
+        }
+        count
     }
 }

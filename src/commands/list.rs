@@ -47,13 +47,15 @@ pub async fn lpush(ctx: &CommandContext, args: &[String], message: &Message) -> 
     // Notify one waiting BLPOP client for this key
     ctx.server.blocking.notify_list_key(key).await;
 
-    // Update replication offset if this is a master
+    // Update replication offset and broadcast to replicas if this is a master
     if !ctx.is_slave {
         let mut repl = ctx.server.replication.write().await;
         if repl.is_master() {
             repl.acked_replica_count = 0;
             repl.expected_offset += message.length()?;
         }
+        drop(repl);
+        ctx.server.replicas.broadcast(message).await;
     }
 
     Ok(Some(Message::Integer(Integer { value: len as i64 })))
@@ -99,13 +101,15 @@ pub async fn rpush(ctx: &CommandContext, args: &[String], message: &Message) -> 
     // Notify one waiting BLPOP client for this key
     ctx.server.blocking.notify_list_key(key).await;
 
-    // Update replication offset if this is a master
+    // Update replication offset and broadcast to replicas if this is a master
     if !ctx.is_slave {
         let mut repl = ctx.server.replication.write().await;
         if repl.is_master() {
             repl.acked_replica_count = 0;
             repl.expected_offset += message.length()?;
         }
+        drop(repl);
+        ctx.server.replicas.broadcast(message).await;
     }
 
     Ok(Some(Message::Integer(Integer { value: len as i64 })))

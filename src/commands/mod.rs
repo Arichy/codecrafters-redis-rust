@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -12,6 +13,14 @@ pub mod sorted_set;
 pub mod pubsub;
 pub mod server_cmds;
 pub mod transaction;
+pub mod geo;
+
+/// Server configuration (read-only, shared via Arc)
+#[derive(Debug)]
+pub struct ServerConfig {
+    pub dir: Option<PathBuf>,
+    pub dbfilename: Option<PathBuf>,
+}
 
 /// Context for command execution
 pub struct CommandContext {
@@ -19,6 +28,7 @@ pub struct CommandContext {
     pub client_id: String,
     pub selected_db: Arc<RwLock<usize>>,
     pub is_slave: bool,
+    pub config: Arc<ServerConfig>,
 }
 
 /// Parse command from message
@@ -97,6 +107,9 @@ pub async fn execute(
         "command" => server_cmds::command(ctx, args).await,
 
         // Transaction commands are handled at a higher level
+
+        // Geo commands
+        "geoadd" => geo::add(ctx, args).await,
         _ => Ok(None),
     }
 }

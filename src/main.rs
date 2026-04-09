@@ -15,7 +15,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::codec::Framed;
 
-use codecrafters_redis::commands::{self, CommandContext};
+use codecrafters_redis::commands::{self, CommandContext, ServerConfig};
 use codecrafters_redis::message::{Array, BulkString, Integer, Message, MessageFramer, SimpleError, SimpleString};
 use codecrafters_redis::rdb::RDB;
 use codecrafters_redis::server::{ReplicationState, Role, Server};
@@ -52,7 +52,17 @@ fn parse_replicaof(s: &str) -> Result<SocketAddr> {
         return Err(anyhow::Error::msg("Invalid replicaof format"));
     }
     let addr = format!("{}:{}", parts[0], parts[1]);
-    Ok(addr.parse()?)
+    // Try direct parse first
+    if let Ok(socket_addr) = addr.parse::<SocketAddr>() {
+        return Ok(socket_addr);
+    }
+    // Resolve hostname - prefer IPv4 address
+    let addrs: Vec<SocketAddr> = std::net::ToSocketAddrs::to_socket_addrs(&addr)?
+        .collect();
+    if let Some(ipv4) = addrs.iter().find(|a| a.is_ipv4()) {
+        return Ok(*ipv4);
+    }
+    addrs.into_iter().next().context("No addresses found for hostname")
 }
 
 #[tokio::main]
@@ -117,7 +127,7 @@ async fn main() -> Result<()> {
 
     // Start server
     let port = args.read().await.port;
-    let listener = TcpListener::bind(("127.0.0.1", port)).await?;
+    let listener = TcpListener::bind(("0.0.0.0", port)).await?;
 
     println!("Redis server started on port {}", port);
 
@@ -191,6 +201,7 @@ async fn handle_exec(
     peer_addr: &str,
     selected_db: &Arc<RwLock<usize>>,
     is_slave: bool,
+    config: &Arc<ServerConfig>,
 ) -> Result<()> {
     if !*in_transaction {
         return send_error(writer, "ERR EXEC without MULTI".to_string()).await;
@@ -204,6 +215,7 @@ async fn handle_exec(
                 client_id: peer_addr.to_string(),
                 selected_db: Arc::clone(selected_db),
                 is_slave,
+                config: Arc::clone(config),
             };
             if let Ok(Some(result)) = commands::execute(&ctx, &cmd, &args, &queued_msg).await {
                 results.push(result);
@@ -241,6 +253,7 @@ async fn check_subscribe_mode(
 async fn handle_psync(
     writer: &MessageWriter,
     server: &Server,
+    peer_addr: &str,
 ) -> Result<()> {
     let repl = server.replication.read().await;
     let fullresync = format!("FULLRESYNC {} {}", repl.master_replid, repl.master_repl_offset);
@@ -258,10 +271,12 @@ async fn handle_psync(
     send_response(writer, Message::RDB(rdb.clone())).await?;
     drop(rdb);
 
-    // Add this replica to the count
+    // Register replica writer and update counts
+    server.replicas.register(peer_addr.to_string(), Arc::clone(writer)).await;
+
     let mut repl = server.replication.write().await;
     repl.total_replica_count += 1;
-    repl.acked_replica_count += 1;
+    repl.acked_replica_count = 0;
 
     Ok(())
 }
@@ -303,6 +318,15 @@ async fn handle_client(
     let (writer, reader) = framed.split();
     let writer = Arc::new(Mutex::new(writer));
     let reader = Arc::new(Mutex::new(reader));
+
+    // Read config once at connection setup
+    let config = {
+        let args_read = args.read().await;
+        Arc::new(ServerConfig {
+            dir: args_read.dir.clone(),
+            dbfilename: args_read.dbfilename.clone(),
+        })
+    };
 
     let selected_db = Arc::new(RwLock::new(0_usize));
     let mut transaction_queue: VecDeque<Message> = VecDeque::new();
@@ -359,6 +383,7 @@ async fn handle_client(
                     &peer_addr,
                     &selected_db,
                     is_slave,
+                    &config,
                 )
                 .await?;
                 continue;
@@ -382,7 +407,7 @@ async fn handle_client(
 
         // Special handling for PSYNC (replication)
         if cmd == "psync" {
-            handle_psync(&writer, &server).await?;
+            handle_psync(&writer, &server, &peer_addr).await?;
             continue;
         }
 
@@ -399,6 +424,7 @@ async fn handle_client(
             client_id: peer_addr.clone(),
             selected_db: Arc::clone(&selected_db),
             is_slave,
+            config: Arc::clone(&config),
         };
 
         match commands::execute(&ctx, &cmd, &args_vec, &message).await {
@@ -471,6 +497,7 @@ async fn connect_to_master(
         }))
         .await?;
     reader.next().await; // FULLRESYNC response
+    reader.next().await; // RDB file
 
     // Continue listening to master's commands
     let framed = reader.reunite(writer)?;

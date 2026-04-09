@@ -15,6 +15,7 @@ pub type MessageWriter = Arc<Mutex<SplitSink<Framed<TcpStream, MessageFramer>, M
 #[derive(Debug, Clone)]
 pub enum Message {
     Array(Array),
+    NullArray,
     SimpleString(SimpleString),
     BulkString(BulkString),
     Integer(Integer),
@@ -111,7 +112,7 @@ impl Decoder for MessageFramer {
                         format!("Count is not a number."),
                     ));
                 }
-                let count = count.unwrap().parse::<u32>();
+                let count = count.unwrap().parse::<i32>();
                 if count.is_err() {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
@@ -120,6 +121,11 @@ impl Decoder for MessageFramer {
                 }
                 let count = count.unwrap();
                 src.advance(new_line_pos + 2);
+
+                // Null array: *-1\r\n
+                if count == -1 {
+                    return Ok(Some(Message::NullArray));
+                }
 
                 let mut items = vec![];
                 for _ in 0..count {
@@ -260,6 +266,9 @@ impl Encoder<Message> for MessageFramer {
                     let _ = self.encode(item, dst);
                 }
             }
+            Message::NullArray => {
+                dst.extend_from_slice(b"*-1\r\n");
+            }
             Message::SimpleString(SimpleString { string }) => {
                 let simple_string = format!("+{string}\r\n");
                 dst.extend_from_slice(simple_string.as_bytes());
@@ -278,6 +287,7 @@ impl Encoder<Message> for MessageFramer {
                 let bytes = rdb.to_bytes();
                 dst.extend_from_slice(format!("${}\r\n", bytes.len()).as_bytes());
                 dst.extend_from_slice(bytes.as_ref());
+                dst.extend_from_slice(b"\r\n");
             }
 
             Message::Integer(Integer { value }) => {
