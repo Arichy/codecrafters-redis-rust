@@ -287,7 +287,7 @@ impl Encoder<Message> for MessageFramer {
                 let bytes = rdb.to_bytes();
                 dst.extend_from_slice(format!("${}\r\n", bytes.len()).as_bytes());
                 dst.extend_from_slice(bytes.as_ref());
-                dst.extend_from_slice(b"\r\n");
+                // No trailing \r\n - tester expects raw RDB bytes only
             }
 
             Message::Integer(Integer { value }) => {
