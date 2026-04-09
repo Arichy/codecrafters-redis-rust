@@ -31,5 +31,5 @@ pub async fn add(ctx: &CommandContext, args: &[String]) -> Result<Option<Message
 
     let zadd_args = &[key.to_string(), "0".to_string(), member.to_string()];
 
-    zadd(ctx, args).await
+    zadd(ctx, zadd_args).await
 }
