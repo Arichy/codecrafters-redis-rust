@@ -197,10 +197,6 @@ impl RDB {
                 map: database_map,
             });
         }
-        println!("{header}");
-        println!("{metadata:?}");
-        println!("{databases:?}");
-        println!("{bytes:?}");
 
         // parse EOF section
         assert_eq!(bytes[0], 0xff);

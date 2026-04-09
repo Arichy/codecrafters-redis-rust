@@ -15,7 +15,7 @@ pub async fn lpush(ctx: &CommandContext, args: &[String], message: &Message) -> 
     }
 
     let key = &args[0];
-    let values: VecDeque<String> = args[1..].iter().rev().map(|s| s.clone()).collect();
+    let values: Vec<String> = args[1..].iter().map(|s| s.clone()).collect();
 
     let mut rdb = ctx.server.rdb.write().await;
     let db_index = *ctx.selected_db.read().await;
@@ -265,10 +265,8 @@ pub async fn blpop(ctx: &CommandContext, args: &[String]) -> Result<Option<Messa
             // Check if we actually got an element
             if matches!(result, Message::BulkString(ref bs) if bs.length == -1) {
                 // List is still empty (race condition - another client got it)
-                Ok(Some(Message::BulkString(BulkString {
-                    length: -1,
-                    string: String::new(),
-                })))
+                // Return null array since we timed out waiting
+                Ok(Some(Message::NullArray))
             } else {
                 Ok(Some(Message::Array(Array {
                     items: vec![
@@ -283,10 +281,7 @@ pub async fn blpop(ctx: &CommandContext, args: &[String]) -> Result<Option<Messa
         }
         Err(_) => {
             // Timeout
-            Ok(Some(Message::BulkString(BulkString {
-                length: -1,
-                string: String::new(),
-            })))
+            Ok(Some(Message::NullArray))
         }
     }
 }

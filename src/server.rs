@@ -64,9 +64,8 @@ impl BlockingManager {
         if let Some(list) = waiters.get_mut(key) {
             if let Some(notify) = list.first() {
                 notify.notify_one();
-                list.remove(0); // Remove the notified client
+                list.remove(0);
             }
-            // Clean up empty entries
             if list.is_empty() {
                 waiters.remove(key);
             }

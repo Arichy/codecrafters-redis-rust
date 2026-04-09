@@ -313,8 +313,16 @@ async fn handle_client(
     args: Arc<RwLock<Args>>,
     is_slave: bool,
 ) -> Result<()> {
-    let peer_addr = stream.peer_addr()?.to_string();
-    let framed = Framed::new(stream, MessageFramer);
+    handle_client_with_framed(Framed::new(stream, MessageFramer), server, args, is_slave).await
+}
+
+async fn handle_client_with_framed(
+    framed: Framed<TcpStream, MessageFramer>,
+    server: Server,
+    args: Arc<RwLock<Args>>,
+    is_slave: bool,
+) -> Result<()> {
+    let peer_addr = framed.get_ref().peer_addr()?.to_string();
     let (writer, reader) = framed.split();
     let writer = Arc::new(Mutex::new(writer));
     let reader = Arc::new(Mutex::new(reader));
@@ -501,8 +509,7 @@ async fn connect_to_master(
 
     // Continue listening to master's commands
     let framed = reader.reunite(writer)?;
-    let stream = framed.into_inner();
-    handle_client(stream, server, args, true).await?;
+    handle_client_with_framed(framed, server, args, true).await?;
 
     Ok(())
 }
