@@ -110,6 +110,7 @@ pub async fn execute(
 
         // Geo commands
         "geoadd" => geo::add(ctx, args).await,
+        "geopos" => geo::pos(ctx, args).await,
         _ => Ok(None),
     }
 }

@@ -8,8 +8,8 @@ const LONGITUDE_RANGE: f64 = MAX_LONGITUDE - MIN_LONGITUDE;
 
 #[derive(Debug)]
 pub(crate) struct Coordinates {
-    latitude: f64,
-    longitude: f64,
+    pub latitude: f64,
+    pub longitude: f64,
 }
 
 fn compact_int64_to_int32(v: u64) -> u32 {
