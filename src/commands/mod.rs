@@ -116,7 +116,7 @@ pub async fn execute(
         "geodist" => geo::distance(ctx, args).await,
         "geosearch" => geo::search(ctx, args).await,
 
-        "acl" => auth::acl_whoami(ctx, args).await,
+        "acl" => auth::acl(ctx, args).await,
         _ => Ok(None),
     }
 }
