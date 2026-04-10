@@ -352,6 +352,10 @@ async fn handle_client_with_framed(
             continue;
         }
 
+        if ctx.in_transaction && cmd.as_str() == "watch" {
+            send_error(&writer, "ERR WATCH inside MULTI is not allowed".to_string()).await?;
+        }
+
         // If in transaction and not MULTI/EXEC/DISCARD, queue the command
         if ctx.in_transaction && !matches!(cmd.as_str(), "multi" | "exec" | "discard") {
             ctx.transaction_queue.push_back(message.clone());

@@ -10,11 +10,9 @@ pub async fn watch(ctx: &mut CommandContext, args: &[String]) -> Result<Option<M
     }
 
     for key in args {
-        ctx.server.watchers.register(
-            key.to_string(),
-            ctx.client_id.clone(),
-            ctx.is_dirty.clone(),
-        );
+        ctx.server
+            .watchers
+            .register(key.to_string(), ctx.client_id.clone(), ctx.is_dirty.clone());
     }
 
     Ok(Some(Message::new_simple_string("OK")))
