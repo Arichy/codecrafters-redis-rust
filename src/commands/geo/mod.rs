@@ -4,13 +4,13 @@ use crate::{
             decode::{decode, Coordinates},
             encode::encode,
         },
-        sorted_set::{zadd, zscore},
+        sorted_set::{zadd, zrange, zscore},
         CommandContext,
     },
     message::{Array, BulkString, Message, SimpleError},
     rdb::Value,
 };
-use anyhow::{Context as AnyhowContext, Result};
+use anyhow::{anyhow, Context as AnyhowContext, Result};
 
 mod decode;
 mod distance;
@@ -152,4 +152,92 @@ pub async fn distance(ctx: &CommandContext, args: &[String]) -> Result<Option<Me
         length: dist_str.len() as isize,
         string: dist_str,
     })))
+}
+
+pub async fn search(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
+    let key = &args[0];
+    let fromlonlat = &args[1];
+    let lo = args[2].parse::<f64>()?;
+    let la = args[3].parse::<f64>()?;
+    let byradius = &args[4];
+    let radius = args[5].parse::<f64>()?;
+    let unit = &args[6];
+
+    if !fromlonlat.eq_ignore_ascii_case("fromlonlat") {
+        return Err(anyhow!("Only support FROMLONLAT"));
+    }
+
+    if !byradius.eq_ignore_ascii_case("byradius") {
+        return Err(anyhow!("Only support BYRADIUS"));
+    }
+
+    let radius = match unit.as_str() {
+        "m" | "M" => radius,
+        "km" | "KM" => radius * 1000.0,
+        _ => todo!(),
+    };
+
+    let mut ret = vec![];
+    let Message::Array(Array { items }) =
+        zrange(ctx, &[key.to_string(), "0".to_string(), "-1".to_string()])
+            .await?
+            .unwrap()
+    else {
+        unreachable!()
+    };
+    for item in &items {
+        let Message::BulkString(BulkString {
+            length,
+            string: member,
+        }) = item
+        else {
+            unreachable!();
+        };
+
+        let member_pos = pos(ctx, &[key.to_string(), member.to_string()])
+            .await?
+            .unwrap();
+
+        let Message::Array(Array { items }) = member_pos else {
+            unreachable!()
+        };
+        let member_pos = &items[0];
+        let Message::Array(Array { items }) = member_pos else {
+            unreachable!()
+        };
+        let Message::BulkString(BulkString {
+            length,
+            string: member_lo,
+        }) = &items[0]
+        else {
+            unreachable!()
+        };
+        let Message::BulkString(BulkString {
+            length,
+            string: member_la,
+        }) = &items[1]
+        else {
+            unreachable!()
+        };
+
+        let dist = distance::haversine(
+            Coordinates {
+                latitude: la,
+                longitude: lo,
+            },
+            Coordinates {
+                latitude: member_la.parse()?,
+                longitude: member_lo.parse()?,
+            },
+        );
+
+        if dist <= radius {
+            ret.push(Message::BulkString(BulkString {
+                length: member.len() as isize,
+                string: member.to_string(),
+            }));
+        }
+    }
+
+    Ok(Some(Message::Array(Array { items: ret })))
 }

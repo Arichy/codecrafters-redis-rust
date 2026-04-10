@@ -112,6 +112,7 @@ pub async fn execute(
         "geoadd" => geo::add(ctx, args).await,
         "geopos" => geo::pos(ctx, args).await,
         "geodist" => geo::distance(ctx, args).await,
+        "geosearch" => geo::search(ctx, args).await,
         _ => Ok(None),
     }
 }
