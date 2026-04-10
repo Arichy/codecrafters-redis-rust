@@ -22,18 +22,26 @@ pub struct Server {
     /// Replica connection manager
     pub replicas: Arc<ReplicaManager>,
     /// Users
-    pub users: Arc<DashMap<String, User>>,
+    pub users: Arc<DashMap<String, Arc<User>>>,
 }
 
 impl Server {
     pub fn new(rdb: RDB, replication_state: ReplicationState) -> Self {
+        let default_user = User {
+            name: "default".to_string(),
+            passwords: vec![],
+        };
+
+        let mut users = DashMap::new();
+        users.insert("default".to_string(), Arc::new(default_user));
+
         Self {
             rdb: Arc::new(RwLock::new(rdb)),
             blocking: Arc::new(BlockingManager::new()),
             pubsub: Arc::new(PubSubManager::new()),
             replication: Arc::new(RwLock::new(replication_state)),
             replicas: Arc::new(ReplicaManager::new()),
-            users: Arc::new(DashMap::new()),
+            users: Arc::new(users),
         }
     }
 }

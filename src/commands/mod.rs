@@ -1,8 +1,10 @@
 use anyhow::Result;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::commands::auth::User;
 use crate::message::Message;
 use crate::rdb::Database;
 use crate::server::Server;
@@ -31,6 +33,7 @@ pub struct CommandContext {
     pub selected_db: Arc<RwLock<usize>>,
     pub is_slave: bool,
     pub config: Arc<ServerConfig>,
+    pub current_user: Option<Arc<User>>,
 }
 
 /// Parse command from message
@@ -59,7 +62,7 @@ pub fn parse_command(message: &Message) -> Option<(String, Vec<String>)> {
 
 /// Execute a command
 pub async fn execute(
-    ctx: &CommandContext,
+    ctx: &mut CommandContext,
     cmd: &str,
     args: &[String],
     message: &Message,

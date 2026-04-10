@@ -1,12 +1,14 @@
-use anyhow::{anyhow, Result};
+use std::sync::Arc;
+
+use anyhow::Result;
 use sha2::{Digest, Sha256};
 
-use crate::{commands::CommandContext, message::Message};
+use crate::{commands::CommandContext, message::{Message, SimpleError}};
 
 #[derive(Debug, Clone)]
 pub struct User {
-    name: String,
-    passwords: Vec<String>,
+    pub name: String,
+    pub passwords: Vec<String>,
 }
 
 pub async fn acl(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -16,12 +18,18 @@ pub async fn acl(ctx: &CommandContext, args: &[String]) -> Result<Option<Message
         "whoami" => whoami(ctx, args).await,
         "getuser" => getuser(ctx, args).await,
         "setuser" => setuser(ctx, args).await,
-        other => Err(anyhow!("Unsupport subcommand: {other}")),
+        other => Ok(Some(Message::new_error(format!("ERR unknown subcommand '{}'", other)))),
     }
 }
 
 async fn whoami(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
-    Ok(Some(Message::new_bulk_string("default".to_string())))
+    Ok(Some(Message::new_bulk_string(
+        ctx.current_user
+            .as_ref()
+            .expect("Should not happen if not authed")
+            .name
+            .to_string(),
+    )))
 }
 
 async fn getuser(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -62,22 +70,24 @@ async fn setuser(ctx: &CommandContext, args: &[String]) -> Result<Option<Message
             .server
             .users
             .entry(username.to_string())
-            .or_insert_with(|| User {
-                name: username.to_string(),
-                passwords: vec![],
+            .or_insert_with(|| {
+                Arc::new(User {
+                    name: username.to_string(),
+                    passwords: vec![],
+                })
             });
 
-        entry
-            .value_mut()
-            .passwords
-            .push(hash_password(new_password));
+        let mut new_user = (**entry).clone();
+        new_user.passwords.push(hash_password(new_password));
+        *entry = Arc::new(new_user);
+
         Ok(Some(Message::new_simple_string("OK")))
     } else {
-        Err(anyhow!("Unsupported rule {rule}"))
+        Ok(Some(Message::new_error(format!("ERR Unsupported rule {}", rule))))
     }
 }
 
-pub async fn auth(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
+pub async fn auth(ctx: &mut CommandContext, args: &[String]) -> Result<Option<Message>> {
     let username = &args[0];
     let password = &args[1];
 
@@ -85,16 +95,13 @@ pub async fn auth(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
         Some(user) => {
             let password = hash_password(password);
             if user.passwords.is_empty() || user.passwords.contains(&password) {
-                Ok(Some(Message::new_simple_string("OK".to_string())))
+                ctx.current_user = Some(user.value().clone());
+                Ok(Some(Message::new_simple_string("OK")))
             } else {
-                Err(anyhow!(
-                    "WRONGPASS invalid username-password pair or user is disabled."
-                ))
+                Ok(Some(Message::new_error("WRONGPASS invalid username-password pair or user is disabled.".to_string())))
             }
         }
-        None => Err(anyhow!(
-            "WRONGPASS invalid username-password pair or user is disabled."
-        )),
+        None => Ok(Some(Message::new_error("WRONGPASS invalid username-password pair or user is disabled.".to_string()))),
     }
 }
 

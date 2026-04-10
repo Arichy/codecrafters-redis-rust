@@ -20,8 +20,10 @@ use codecrafters_redis::message::{Integer, Message, MessageFramer, SimpleError, 
 use codecrafters_redis::rdb::RDB;
 use codecrafters_redis::server::{ReplicationState, Role, Server};
 
-type MessageReader = Arc<Mutex<futures_util::stream::SplitStream<Framed<TcpStream, MessageFramer>>>>;
-type MessageWriter = Arc<Mutex<futures_util::stream::SplitSink<Framed<TcpStream, MessageFramer>, Message>>>;
+type MessageReader =
+    Arc<Mutex<futures_util::stream::SplitStream<Framed<TcpStream, MessageFramer>>>>;
+type MessageWriter =
+    Arc<Mutex<futures_util::stream::SplitSink<Framed<TcpStream, MessageFramer>, Message>>>;
 
 #[derive(Debug, Clone)]
 struct Args {
@@ -57,12 +59,14 @@ fn parse_replicaof(s: &str) -> Result<SocketAddr> {
         return Ok(socket_addr);
     }
     // Resolve hostname - prefer IPv4 address
-    let addrs: Vec<SocketAddr> = std::net::ToSocketAddrs::to_socket_addrs(&addr)?
-        .collect();
+    let addrs: Vec<SocketAddr> = std::net::ToSocketAddrs::to_socket_addrs(&addr)?.collect();
     if let Some(ipv4) = addrs.iter().find(|a| a.is_ipv4()) {
         return Ok(*ipv4);
     }
-    addrs.into_iter().next().context("No addresses found for hostname")
+    addrs
+        .into_iter()
+        .next()
+        .context("No addresses found for hostname")
 }
 
 #[tokio::main]
@@ -145,10 +149,7 @@ async fn main() -> Result<()> {
 }
 
 /// Helper function to send a response message to the client
-async fn send_response(
-    writer: &MessageWriter,
-    message: Message,
-) -> Result<()> {
+async fn send_response(writer: &MessageWriter, message: Message) -> Result<()> {
     let mut writer_locked = writer.lock().await;
     writer_locked.send(message).await?;
     Ok(())
@@ -156,9 +157,12 @@ async fn send_response(
 
 /// Helper function to send a simple string response
 async fn send_ok(writer: &MessageWriter) -> Result<()> {
-    send_response(writer, Message::SimpleString(SimpleString {
-        string: "OK".to_string(),
-    }))
+    send_response(
+        writer,
+        Message::SimpleString(SimpleString {
+            string: "OK".to_string(),
+        }),
+    )
     .await
 }
 
@@ -210,14 +214,15 @@ async fn handle_exec(
     let mut results = Vec::new();
     for queued_msg in transaction_queue.drain(..) {
         if let Some((cmd, args)) = commands::parse_command(&queued_msg) {
-            let ctx = CommandContext {
+            let mut ctx = CommandContext {
                 server: server.clone(),
                 client_id: peer_addr.to_string(),
                 selected_db: Arc::clone(selected_db),
                 is_slave,
                 config: Arc::clone(config),
+                current_user: None,
             };
-            if let Ok(Some(result)) = commands::execute(&ctx, &cmd, &args, &queued_msg).await {
+            if let Ok(Some(result)) = commands::execute(&mut ctx, &cmd, &args, &queued_msg).await {
                 results.push(result);
             }
         }
@@ -236,7 +241,14 @@ async fn check_subscribe_mode(
 ) -> Result<bool> {
     let in_subscribe_mode = server.pubsub.is_subscribed(peer_addr).await;
     if in_subscribe_mode {
-        let allowed = ["subscribe", "unsubscribe", "psubscribe", "punsubscribe", "ping", "quit"];
+        let allowed = [
+            "subscribe",
+            "unsubscribe",
+            "psubscribe",
+            "punsubscribe",
+            "ping",
+            "quit",
+        ];
         if !allowed.contains(&cmd) {
             send_error(
                 writer,
@@ -250,20 +262,17 @@ async fn check_subscribe_mode(
 }
 
 /// Handle PSYNC command (replication)
-async fn handle_psync(
-    writer: &MessageWriter,
-    server: &Server,
-    peer_addr: &str,
-) -> Result<()> {
+async fn handle_psync(writer: &MessageWriter, server: &Server, peer_addr: &str) -> Result<()> {
     let repl = server.replication.read().await;
-    let fullresync = format!("FULLRESYNC {} {}", repl.master_replid, repl.master_repl_offset);
+    let fullresync = format!(
+        "FULLRESYNC {} {}",
+        repl.master_replid, repl.master_repl_offset
+    );
     drop(repl);
 
     send_response(
         writer,
-        Message::SimpleString(SimpleString {
-            string: fullresync,
-        }),
+        Message::SimpleString(SimpleString { string: fullresync }),
     )
     .await?;
 
@@ -272,7 +281,10 @@ async fn handle_psync(
     drop(rdb);
 
     // Register replica writer and update counts
-    server.replicas.register(peer_addr.to_string(), Arc::clone(writer)).await;
+    server
+        .replicas
+        .register(peer_addr.to_string(), Arc::clone(writer))
+        .await;
 
     let mut repl = server.replication.write().await;
     repl.total_replica_count += 1;
@@ -290,7 +302,11 @@ async fn handle_subscribe(
 ) -> Result<()> {
     server
         .pubsub
-        .subscribe(peer_addr.to_string(), channel.to_string(), Arc::clone(writer))
+        .subscribe(
+            peer_addr.to_string(),
+            channel.to_string(),
+            Arc::clone(writer),
+        )
         .await;
 
     let channels = server.pubsub.get_client_channels(peer_addr).await;
@@ -337,6 +353,29 @@ async fn handle_client_with_framed(
     };
 
     let selected_db = Arc::new(RwLock::new(0_usize));
+
+    let default_user = server
+        .users
+        .get("default")
+        .expect("Must have default user")
+        .value()
+        .clone();
+
+    let current_user = if default_user.passwords.is_empty() {
+        Some(default_user)
+    } else {
+        None
+    };
+
+    let mut ctx = CommandContext {
+        server: server.clone(),
+        client_id: peer_addr.clone(),
+        selected_db: Arc::clone(&selected_db),
+        is_slave,
+        config: Arc::clone(&config),
+        current_user,
+    };
+
     let mut transaction_queue: VecDeque<Message> = VecDeque::new();
     let mut in_transaction = false;
 
@@ -370,6 +409,14 @@ async fn handle_client_with_framed(
             Some(parsed) => parsed,
             None => continue,
         };
+
+        if matches!(ctx.current_user, None) {
+            let allow_list = ["auth"];
+            if !allow_list.contains(&cmd.to_lowercase().as_str()) {
+                send_error(&writer, "NOAUTH Authentication required.".to_string()).await;
+                continue;
+            }
+        }
 
         // Check if in subscribe mode
         if check_subscribe_mode(&server, &writer, &peer_addr, &cmd).await? {
@@ -406,9 +453,12 @@ async fn handle_client_with_framed(
         // If in transaction, queue the command
         if in_transaction {
             transaction_queue.push_back(message.clone());
-            send_response(&writer, Message::SimpleString(SimpleString {
-                string: "QUEUED".to_string(),
-            }))
+            send_response(
+                &writer,
+                Message::SimpleString(SimpleString {
+                    string: "QUEUED".to_string(),
+                }),
+            )
             .await?;
             continue;
         }
@@ -427,15 +477,7 @@ async fn handle_client_with_framed(
         }
 
         // Execute command
-        let ctx = CommandContext {
-            server: server.clone(),
-            client_id: peer_addr.clone(),
-            selected_db: Arc::clone(&selected_db),
-            is_slave,
-            config: Arc::clone(&config),
-        };
-
-        match commands::execute(&ctx, &cmd, &args_vec, &message).await {
+        match commands::execute(&mut ctx, &cmd, &args_vec, &message).await {
             Ok(Some(response)) => {
                 send_response(&writer, response).await?;
             }
@@ -463,7 +505,9 @@ async fn connect_to_master(
 
     // Send PING
     writer
-        .send(Message::new_array(vec![Message::new_bulk_string("PING".to_string())]))
+        .send(Message::new_array(vec![Message::new_bulk_string(
+            "PING".to_string(),
+        )]))
         .await?;
     reader.next().await;
 
