@@ -83,6 +83,13 @@ impl Message {
             _ => None,
         }
     }
+
+    pub fn as_error(&self) -> Option<&str> {
+        match self {
+            Message::SimpleError(SimpleError { string }) => Some(string),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

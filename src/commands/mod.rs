@@ -1,8 +1,9 @@
 use anyhow::Result;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{oneshot, Mutex, RwLock};
 
 use crate::commands::auth::User;
 use crate::message::Message;
@@ -12,6 +13,7 @@ use crate::server::Server;
 pub mod auth;
 pub mod geo;
 pub mod list;
+pub mod optimistic_locking;
 pub mod pubsub;
 pub mod server_cmds;
 pub mod sorted_set;
@@ -34,6 +36,9 @@ pub struct CommandContext {
     pub is_slave: bool,
     pub config: Arc<ServerConfig>,
     pub current_user: Option<Arc<User>>,
+    pub in_transaction: bool,
+    pub transaction_queue: VecDeque<Message>,
+    pub is_dirty: Arc<AtomicBool>,
 }
 
 /// Parse command from message
@@ -60,19 +65,43 @@ pub fn parse_command(message: &Message) -> Option<(String, Vec<String>)> {
     }
 }
 
-/// Execute a command
-pub async fn execute(
+fn is_successful(ret: &Result<Option<Message>>) -> bool {
+    match ret {
+        Ok(Some(msg)) => msg.as_error().is_none(),
+        _ => false,
+    }
+}
+
+/// Execute a command (inner implementation - callable from within EXEC)
+pub(crate) async fn execute_inner(
     ctx: &mut CommandContext,
     cmd: &str,
     args: &[String],
     message: &Message,
 ) -> Result<Option<Message>> {
     match cmd {
+        // Transaction commands - MULTI/DISCARD handled directly, EXEC uses special path
+        "multi" => Ok(Some(Message::new_simple_string("OK"))),
+        "exec" => Ok(Some(Message::new_error(
+            "ERR EXEC inside MULTI is not allowed",
+        ))),
+        "discard" => Ok(Some(Message::new_simple_string("OK"))),
+
         // String commands
         "ping" => server_cmds::ping(ctx, args).await,
         "echo" => server_cmds::echo(ctx, args).await,
         "get" => string::get(ctx, args).await,
-        "set" => string::set(ctx, args, message).await,
+        "set" => {
+            let ret = string::set(ctx, args, message).await;
+
+            let key = args[0].clone();
+
+            if is_successful(&ret) {
+                ctx.server.watchers.notify(&key);
+            }
+
+            ret
+        }
         "incr" => string::incr(ctx, args).await,
 
         // List commands
@@ -111,8 +140,6 @@ pub async fn execute(
         "wait" => server_cmds::wait(ctx, args, message).await,
         "command" => server_cmds::command(ctx, args).await,
 
-        // Transaction commands are handled at a higher level
-
         // Geo commands
         "geoadd" => geo::add(ctx, args).await,
         "geopos" => geo::pos(ctx, args).await,
@@ -121,7 +148,28 @@ pub async fn execute(
 
         "acl" => auth::acl(ctx, args).await,
         "auth" => auth::auth(ctx, args).await,
+
+        "watch" => optimistic_locking::watch(ctx, args).await,
+        "unwatch" => optimistic_locking::unwatch(ctx).await,
         _ => Ok(None),
+    }
+}
+
+/// Execute a command
+pub async fn execute(
+    ctx: &mut CommandContext,
+    cmd: &str,
+    args: &[String],
+    message: &Message,
+) -> Result<Option<Message>> {
+    match cmd {
+        // Transaction commands
+        "multi" => transaction::multi(ctx).await,
+        "exec" => transaction::exec(ctx).await,
+        "discard" => transaction::discard(ctx).await,
+
+        // All other commands go through execute_inner
+        _ => execute_inner(ctx, cmd, args, message).await,
     }
 }
 

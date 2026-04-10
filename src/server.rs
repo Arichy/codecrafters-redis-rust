@@ -1,7 +1,8 @@
 use dashmap::DashMap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use tokio::sync::{Mutex, Notify, RwLock};
+use tokio::sync::{oneshot, Mutex, Notify, RwLock};
 
 use crate::commands::auth::User;
 use crate::message::{Message, MessageWriter};
@@ -23,6 +24,8 @@ pub struct Server {
     pub replicas: Arc<ReplicaManager>,
     /// Users
     pub users: Arc<DashMap<String, Arc<User>>>,
+    /// Watchers
+    pub watchers: Arc<WatchingManager>,
 }
 
 impl Server {
@@ -42,8 +45,11 @@ impl Server {
             replication: Arc::new(RwLock::new(replication_state)),
             replicas: Arc::new(ReplicaManager::new()),
             users: Arc::new(users),
+            watchers: Arc::new(WatchingManager::new()),
         }
     }
+
+    pub fn notify_watchers(&self, key: &str) {}
 }
 
 /// Manages blocking operations like BLPOP, XREAD block
@@ -313,5 +319,82 @@ impl ReplicaManager {
             }
         }
         count
+    }
+}
+
+pub struct WatchingManager {
+    /// key -> (client_id -> is_dirty)
+    /// Each key can have multiple clients watching it
+    watchers: DashMap<String, HashMap<String, Arc<AtomicBool>>>,
+    /// client_id -> set of keys (reverse mapping for UNWATCH)
+    client_keys: DashMap<String, HashSet<String>>,
+}
+
+impl WatchingManager {
+    pub fn new() -> Self {
+        Self {
+            watchers: DashMap::new(),
+            client_keys: DashMap::new(),
+        }
+    }
+
+    /// Register a client watching a key
+    pub fn register(&self, key: String, client_id: String, is_dirty: Arc<AtomicBool>) {
+        // Add to watchers (key -> client)
+        self.watchers
+            .entry(key.clone())
+            .or_insert_with(HashMap::new)
+            .insert(client_id.clone(), is_dirty);
+
+        // Add to client_keys (client -> key)
+        self.client_keys
+            .entry(client_id)
+            .or_insert_with(HashSet::new)
+            .insert(key);
+    }
+
+    /// Unregister a specific key watch for a client
+    pub fn unregister(&self, key: &str, client_id: &str) {
+        // Remove from watchers
+        if let Some(mut entry) = self.watchers.get_mut(key) {
+            entry.remove(client_id);
+            if entry.is_empty() {
+                self.watchers.remove(key);
+            }
+        }
+
+        // Remove from client_keys
+        if let Some(mut entry) = self.client_keys.get_mut(client_id) {
+            entry.remove(key);
+            if entry.is_empty() {
+                self.client_keys.remove(client_id);
+            }
+        }
+    }
+
+    /// Unwatch all keys for a client (UNWATCH command)
+    pub fn unwatch_all(&self, client_id: &str) {
+        // Get all keys this client is watching
+        if let Some((_, keys)) = self.client_keys.remove(client_id) {
+            // Remove each key from the watchers map
+            for key in keys {
+                if let Some(mut entry) = self.watchers.get_mut(&key) {
+                    entry.remove(client_id);
+                    if entry.is_empty() {
+                        self.watchers.remove(&key);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Notify all clients watching a key that it has changed
+    pub fn notify(&self, key: &str) {
+        if let Some((_, watchers)) = self.watchers.remove(key) {
+            for (_, is_dirty) in watchers {
+                // Use Release to ensure database writes are visible to observers
+                is_dirty.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
     }
 }

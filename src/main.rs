@@ -4,6 +4,7 @@
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -155,81 +156,9 @@ async fn send_response(writer: &MessageWriter, message: Message) -> Result<()> {
     Ok(())
 }
 
-/// Helper function to send a simple string response
-async fn send_ok(writer: &MessageWriter) -> Result<()> {
-    send_response(
-        writer,
-        Message::SimpleString(SimpleString {
-            string: "OK".to_string(),
-        }),
-    )
-    .await
-}
-
 /// Helper function to send a simple error response
 async fn send_error(writer: &MessageWriter, error: String) -> Result<()> {
     send_response(writer, Message::SimpleError(SimpleError { string: error })).await
-}
-
-/// Handle MULTI command
-async fn handle_multi(
-    writer: &MessageWriter,
-    in_transaction: &mut bool,
-    transaction_queue: &mut VecDeque<Message>,
-) -> Result<()> {
-    *in_transaction = true;
-    transaction_queue.clear();
-    send_ok(writer).await
-}
-
-/// Handle DISCARD command
-async fn handle_discard(
-    writer: &MessageWriter,
-    in_transaction: &mut bool,
-    transaction_queue: &mut VecDeque<Message>,
-) -> Result<()> {
-    if !*in_transaction {
-        return send_error(writer, "ERR DISCARD without MULTI".to_string()).await;
-    }
-    transaction_queue.clear();
-    *in_transaction = false;
-    send_ok(writer).await
-}
-
-/// Handle EXEC command
-async fn handle_exec(
-    writer: &MessageWriter,
-    in_transaction: &mut bool,
-    transaction_queue: &mut VecDeque<Message>,
-    server: &Server,
-    peer_addr: &str,
-    selected_db: &Arc<RwLock<usize>>,
-    is_slave: bool,
-    config: &Arc<ServerConfig>,
-) -> Result<()> {
-    if !*in_transaction {
-        return send_error(writer, "ERR EXEC without MULTI".to_string()).await;
-    }
-
-    let mut results = Vec::new();
-    for queued_msg in transaction_queue.drain(..) {
-        if let Some((cmd, args)) = commands::parse_command(&queued_msg) {
-            let mut ctx = CommandContext {
-                server: server.clone(),
-                client_id: peer_addr.to_string(),
-                selected_db: Arc::clone(selected_db),
-                is_slave,
-                config: Arc::clone(config),
-                current_user: None,
-            };
-            if let Ok(Some(result)) = commands::execute(&mut ctx, &cmd, &args, &queued_msg).await {
-                results.push(result);
-            }
-        }
-    }
-
-    *in_transaction = false;
-    send_response(writer, Message::new_array(results)).await
 }
 
 /// Handle subscribe mode command filtering
@@ -374,10 +303,10 @@ async fn handle_client_with_framed(
         is_slave,
         config: Arc::clone(&config),
         current_user,
+        in_transaction: false,
+        transaction_queue: VecDeque::new(),
+        is_dirty: Arc::new(AtomicBool::new(false)),
     };
-
-    let mut transaction_queue: VecDeque<Message> = VecDeque::new();
-    let mut in_transaction = false;
 
     loop {
         let message = {
@@ -423,43 +352,10 @@ async fn handle_client_with_framed(
             continue;
         }
 
-        // Handle transaction commands
-        match cmd.as_str() {
-            "multi" => {
-                handle_multi(&writer, &mut in_transaction, &mut transaction_queue).await?;
-                continue;
-            }
-            "exec" => {
-                handle_exec(
-                    &writer,
-                    &mut in_transaction,
-                    &mut transaction_queue,
-                    &server,
-                    &peer_addr,
-                    &selected_db,
-                    is_slave,
-                    &config,
-                )
-                .await?;
-                continue;
-            }
-            "discard" => {
-                handle_discard(&writer, &mut in_transaction, &mut transaction_queue).await?;
-                continue;
-            }
-            _ => {}
-        }
-
-        // If in transaction, queue the command
-        if in_transaction {
-            transaction_queue.push_back(message.clone());
-            send_response(
-                &writer,
-                Message::SimpleString(SimpleString {
-                    string: "QUEUED".to_string(),
-                }),
-            )
-            .await?;
+        // If in transaction and not MULTI/EXEC/DISCARD, queue the command
+        if ctx.in_transaction && !matches!(cmd.as_str(), "multi" | "exec" | "discard") {
+            ctx.transaction_queue.push_back(message.clone());
+            send_response(&writer, Message::new_simple_string("QUEUED")).await?;
             continue;
         }
 
