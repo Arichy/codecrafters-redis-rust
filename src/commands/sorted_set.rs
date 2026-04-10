@@ -17,6 +17,11 @@ pub async fn zadd(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
 
     let count = ctx.with_db_mut(|db| zset_add(db, key, member, score)).await?;
 
+    // Notify watchers if we actually added something
+    if count > 0 {
+        ctx.server.watchers.notify(key);
+    }
+
     Ok(Some(Message::new_integer(count)))
 }
 
@@ -99,6 +104,11 @@ pub async fn zrem(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
     let member = &args[1];
 
     let count = ctx.with_db_mut(|db| zset_rem(db, key, member)).await?;
+
+    // Notify watchers if we actually removed something
+    if count > 0 {
+        ctx.server.watchers.notify(key);
+    }
 
     Ok(Some(Message::new_integer(count)))
 }

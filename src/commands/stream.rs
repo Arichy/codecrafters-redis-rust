@@ -108,6 +108,9 @@ pub async fn xadd(
 
     drop(rdb);
 
+    // Notify watchers that this key has changed
+    ctx.server.watchers.notify(key);
+
     // Notify all waiting XREAD clients for this key
     ctx.server.blocking.notify_stream_key(key).await;
 

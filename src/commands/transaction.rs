@@ -9,6 +9,8 @@ use crate::message::Message;
 pub async fn multi(ctx: &mut CommandContext) -> Result<Option<Message>> {
     ctx.in_transaction = true;
     ctx.transaction_queue.clear();
+    // Reset dirty flag at transaction start - Release to ensure clean state for new transaction
+    ctx.is_dirty.store(false, Ordering::Release);
     Ok(Some(Message::new_simple_string("OK")))
 }
 
@@ -33,8 +35,6 @@ pub async fn exec(ctx: &mut CommandContext) -> Result<Option<Message>> {
 
     // Use Acquire to synchronize with Release store in notify()
     if ctx.is_dirty.load(Ordering::Acquire) {
-        // Reset dirty flag - Relaxed is fine here, just clearing state
-        ctx.is_dirty.store(false, Ordering::Relaxed);
         return Ok(Some(Message::NullArray));
     }
 

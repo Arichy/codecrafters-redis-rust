@@ -44,6 +44,9 @@ pub async fn lpush(ctx: &CommandContext, args: &[String], message: &Message) -> 
 
     drop(rdb);
 
+    // Notify watchers that this key has changed
+    ctx.server.watchers.notify(key);
+
     // Notify one waiting BLPOP client for this key
     ctx.server.blocking.notify_list_key(key).await;
 
@@ -98,6 +101,9 @@ pub async fn rpush(ctx: &CommandContext, args: &[String], message: &Message) -> 
 
     drop(rdb);
 
+    // Notify watchers that this key has changed
+    ctx.server.watchers.notify(key);
+
     // Notify one waiting BLPOP client for this key
     ctx.server.blocking.notify_list_key(key).await;
 
@@ -134,6 +140,13 @@ pub async fn lpop(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
     let db = rdb.get_db_mut(db_index)?;
 
     let result = lpop_internal(db, key, count);
+    drop(rdb);
+
+    // Notify watchers if we actually popped something
+    if !matches!(result, Message::NullBulkString) {
+        ctx.server.watchers.notify(key);
+    }
+
     Ok(Some(result))
 }
 

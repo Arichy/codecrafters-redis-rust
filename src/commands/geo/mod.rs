@@ -43,6 +43,11 @@ pub async fn add(ctx: &CommandContext, args: &[String]) -> Result<Option<Message
 
     let count = ctx.with_db_mut(|db| zset_add(db, key, member, score as f64)).await?;
 
+    // Notify watchers if we actually added something
+    if count > 0 {
+        ctx.server.watchers.notify(key);
+    }
+
     Ok(Some(Message::new_integer(count)))
 }
 

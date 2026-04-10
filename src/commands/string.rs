@@ -77,6 +77,9 @@ pub async fn set(ctx: &CommandContext, args: &[String], message: &Message) -> Re
 
     drop(rdb);
 
+    // Notify watchers that this key has changed
+    ctx.server.watchers.notify(key);
+
     // Update replication offset and broadcast to replicas if this is a master
     if !ctx.is_slave {
         let mut repl = ctx.server.replication.write().await;
@@ -105,7 +108,7 @@ pub async fn incr(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
 
     let key = &args[0];
 
-    ctx.with_db_mut(|db| {
+    let result = ctx.with_db_mut(|db| {
         let next_int = if let Some(value) = db.map.get_mut(key) {
             if let ValueType::StringValue(StringValue { string }) = &value.value {
                 match string.parse::<i64>() {
@@ -145,5 +148,12 @@ pub async fn incr(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
                 string: "ERR value is not an integer or out of range".to_string(),
             })))
         }
-    }).await
+    }).await?;
+
+    // Notify watchers if the key was modified
+    if result.is_some() && !matches!(result, Some(Message::SimpleError(_))) {
+        ctx.server.watchers.notify(key);
+    }
+
+    Ok(result)
 }

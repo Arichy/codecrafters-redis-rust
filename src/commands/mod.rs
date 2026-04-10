@@ -65,13 +65,6 @@ pub fn parse_command(message: &Message) -> Option<(String, Vec<String>)> {
     }
 }
 
-fn is_successful(ret: &Result<Option<Message>>) -> bool {
-    match ret {
-        Ok(Some(msg)) => msg.as_error().is_none(),
-        _ => false,
-    }
-}
-
 /// Execute a command (inner implementation - callable from within EXEC)
 pub(crate) async fn execute_inner(
     ctx: &mut CommandContext,
@@ -91,17 +84,7 @@ pub(crate) async fn execute_inner(
         "ping" => server_cmds::ping(ctx, args).await,
         "echo" => server_cmds::echo(ctx, args).await,
         "get" => string::get(ctx, args).await,
-        "set" => {
-            let ret = string::set(ctx, args, message).await;
-
-            let key = args[0].clone();
-
-            if is_successful(&ret) {
-                ctx.server.watchers.notify(&key);
-            }
-
-            ret
-        }
+        "set" => string::set(ctx, args, message).await,
         "incr" => string::incr(ctx, args).await,
 
         // List commands
