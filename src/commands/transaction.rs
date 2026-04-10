@@ -21,6 +21,7 @@ pub async fn discard(ctx: &mut CommandContext) -> Result<Option<Message>> {
     }
     ctx.transaction_queue.clear();
     ctx.in_transaction = false;
+    ctx.server.watchers.unwatch_all(&ctx.client_id);
     Ok(Some(Message::new_simple_string("OK")))
 }
 
@@ -35,6 +36,8 @@ pub async fn exec(ctx: &mut CommandContext) -> Result<Option<Message>> {
 
     // Use Acquire to synchronize with Release store in notify()
     if ctx.is_dirty.load(Ordering::Acquire) {
+        ctx.in_transaction = false;
+        ctx.server.watchers.unwatch_all(&ctx.client_id);
         return Ok(Some(Message::NullArray));
     }
 
