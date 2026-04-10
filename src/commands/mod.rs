@@ -7,6 +7,7 @@ use crate::message::Message;
 use crate::rdb::Database;
 use crate::server::Server;
 
+pub mod auth;
 pub mod geo;
 pub mod list;
 pub mod pubsub;
@@ -114,6 +115,8 @@ pub async fn execute(
         "geopos" => geo::pos(ctx, args).await,
         "geodist" => geo::distance(ctx, args).await,
         "geosearch" => geo::search(ctx, args).await,
+
+        "acl" => auth::acl_whoami(ctx, args).await,
         _ => Ok(None),
     }
 }
