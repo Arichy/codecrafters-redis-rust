@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 
 use crate::commands::CommandContext;
-use crate::message::{Array, BulkString, Integer, Message, SimpleError};
+use crate::message::{Integer, Message, SimpleError};
 use crate::rdb::{ListValue, Value, ValueType};
 
 pub async fn lpush(ctx: &CommandContext, args: &[String], message: &Message) -> Result<Option<Message>> {
@@ -194,15 +194,9 @@ pub async fn lrange(ctx: &CommandContext, args: &[String]) -> Result<Option<Mess
         vec![]
     };
 
-    let items = result
-        .iter()
-        .map(|item| Message::BulkString(BulkString {
-            length: item.len() as isize,
-            string: item.to_string(),
-        }))
-        .collect();
-
-    Ok(Some(Message::Array(Array { items })))
+    Ok(Some(Message::new_array(
+        result.iter().map(|item| Message::new_bulk_string(item.to_string())).collect()
+    )))
 }
 
 pub async fn blpop(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -232,15 +226,10 @@ pub async fn blpop(ctx: &CommandContext, args: &[String]) -> Result<Option<Messa
                     // Remove our waiter since we're not waiting anymore
                     ctx.server.blocking.remove_list_waiter(key, &notify).await;
                     let result = lpop_internal(db, key, 1);
-                    return Ok(Some(Message::Array(Array {
-                        items: vec![
-                            Message::BulkString(BulkString {
-                                length: key.len() as isize,
-                                string: key.clone(),
-                            }),
-                            result,
-                        ],
-                    })));
+                    return Ok(Some(Message::new_array(vec![
+                        Message::new_bulk_string(key.clone()),
+                        result,
+                    ])));
                 }
             }
         }
@@ -266,20 +255,15 @@ pub async fn blpop(ctx: &CommandContext, args: &[String]) -> Result<Option<Messa
             let result = lpop_internal(db, key, 1);
 
             // Check if we actually got an element
-            if matches!(result, Message::BulkString(ref bs) if bs.length == -1) {
+            if matches!(result, Message::NullBulkString) {
                 // List is still empty (race condition - another client got it)
                 // Return null array since we timed out waiting
                 Ok(Some(Message::NullArray))
             } else {
-                Ok(Some(Message::Array(Array {
-                    items: vec![
-                        Message::BulkString(BulkString {
-                            length: key.len() as isize,
-                            string: key.clone(),
-                        }),
-                        result,
-                    ],
-                })))
+                Ok(Some(Message::new_array(vec![
+                    Message::new_bulk_string(key.clone()),
+                    result,
+                ])))
             }
         }
         Err(_) => {
@@ -299,24 +283,11 @@ fn lpop_internal(db: &mut crate::rdb::Database, key: &str, count: usize) -> Mess
                 let removed: Vec<String> = list_value.list.drain(..actual_count).collect();
 
                 match removed.len() {
-                    0 => Message::BulkString(BulkString {
-                        length: -1,
-                        string: String::new(),
-                    }),
-                    1 => Message::BulkString(BulkString {
-                        length: removed[0].len() as isize,
-                        string: removed[0].clone(),
-                    }),
-                    _ => {
-                        let items = removed
-                            .iter()
-                            .map(|s| Message::BulkString(BulkString {
-                                length: s.len() as isize,
-                                string: s.to_string(),
-                            }))
-                            .collect();
-                        Message::Array(Array { items })
-                    }
+                    0 => Message::NullBulkString,
+                    1 => Message::new_bulk_string(removed[0].clone()),
+                    _ => Message::new_array(
+                        removed.iter().map(|s| Message::new_bulk_string(s.to_string())).collect()
+                    ),
                 }
             }
             _ => Message::SimpleError(SimpleError {
@@ -324,10 +295,7 @@ fn lpop_internal(db: &mut crate::rdb::Database, key: &str, count: usize) -> Mess
             }),
         }
     } else {
-        Message::BulkString(BulkString {
-            length: -1,
-            string: String::new(),
-        })
+        Message::NullBulkString
     }
 }
 

@@ -18,6 +18,7 @@ pub enum Message {
     NullArray,
     SimpleString(SimpleString),
     BulkString(BulkString),
+    NullBulkString,
     Integer(Integer),
     SimpleError(SimpleError),
     RDB(RDB),
@@ -34,14 +35,27 @@ impl Message {
     }
 
     pub fn new_bulk_string(string: String) -> Self {
-        Self::BulkString(BulkString {
-            length: string.len() as isize,
-            string,
-        })
+        Self::BulkString(BulkString { string })
     }
 
     pub fn new_array(items: Vec<Message>) -> Self {
         Self::Array(Array { items })
+    }
+
+    pub fn as_bulk_str(&self) -> Option<&str> {
+        match self {
+            Message::BulkString(BulkString { string }) => Some(string),
+            Message::NullBulkString => None,
+            _ => None,
+        }
+    }
+
+    pub fn as_array(&self) -> Option<&Vec<Message>> {
+        match self {
+            Message::Array(Array { items }) => Some(items),
+            Message::NullArray => None,
+            _ => None,
+        }
     }
 }
 
@@ -52,7 +66,6 @@ pub struct Array {
 
 #[derive(Debug, Clone)]
 pub struct BulkString {
-    pub length: isize,
     pub string: String,
 }
 
@@ -179,23 +192,30 @@ impl Decoder for MessageFramer {
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
                 let length_string_bytes = &src[0..new_line_pos];
-                let length = String::from_utf8(length_string_bytes.to_vec());
-                if length.is_err() {
+                let length_str = String::from_utf8(length_string_bytes.to_vec());
+                if length_str.is_err() {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
-                        format!("Length is not a number."),
+                        "Length is not valid UTF-8.",
                     ));
                 }
-                let length = length.unwrap().parse::<usize>();
+                let length_str = length_str.unwrap();
+                let length = length_str.parse::<isize>();
                 if length.is_err() {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
-                        format!("Length is not a number."),
+                        "Length is not a number.",
                     ));
                 }
                 let length = length.unwrap();
                 src.advance(new_line_pos + 2);
 
+                // Null bulk string: $-1\r\n
+                if length < 0 {
+                    return Ok(Some(Message::NullBulkString));
+                }
+
+                let length = length as usize;
                 let is_bulk_string = {
                     if src.len() >= length + 2 {
                         src[length] == b'\r' && src[length + 1] == b'\n'
@@ -209,10 +229,7 @@ impl Decoder for MessageFramer {
                         .context("Bulk string is not valid UTF-8.")
                         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
                     src.advance(length + 2);
-                    Ok(Some(Message::BulkString(BulkString {
-                        length: length as isize,
-                        string,
-                    })))
+                    Ok(Some(Message::BulkString(BulkString { string })))
                 } else {
                     let mut bytes = Bytes::from(src[..length].to_vec());
                     src.advance(length);
@@ -273,15 +290,13 @@ impl Encoder<Message> for MessageFramer {
                 let simple_string = format!("+{string}\r\n");
                 dst.extend_from_slice(simple_string.as_bytes());
             }
-            Message::BulkString(BulkString { length, string }) => {
-                if length < 0 {
-                    let bulk_string = format!("${length}\r\n");
-                    dst.extend_from_slice(bulk_string.as_bytes());
-                } else {
-                    let length = string.len();
-                    let bulk_string = format!("${length}\r\n{string}\r\n");
-                    dst.extend_from_slice(bulk_string.as_bytes());
-                }
+            Message::BulkString(BulkString { string }) => {
+                let length = string.len();
+                let bulk_string = format!("${length}\r\n{string}\r\n");
+                dst.extend_from_slice(bulk_string.as_bytes());
+            }
+            Message::NullBulkString => {
+                dst.extend_from_slice(b"$-1\r\n");
             }
             Message::RDB(rdb) => {
                 let bytes = rdb.to_bytes();

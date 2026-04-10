@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::commands::CommandContext;
-use crate::message::{BulkString, Integer, Message, SimpleError, SimpleString};
+use crate::message::{Integer, Message, SimpleError, SimpleString};
 use crate::rdb::{StringValue, Value, ValueType};
 
 pub async fn get(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -19,28 +19,19 @@ pub async fn get(ctx: &CommandContext, args: &[String]) -> Result<Option<Message
 
     if let Some(value) = db.map.get(key) {
         if value.is_expired() {
-            return Ok(Some(Message::BulkString(BulkString {
-                length: -1,
-                string: String::new(),
-            })));
+            return Ok(Some(Message::NullBulkString));
         }
 
         match &value.value {
             ValueType::StringValue(StringValue { string }) => {
-                Ok(Some(Message::BulkString(BulkString {
-                    length: string.len() as isize,
-                    string: string.clone(),
-                })))
+                Ok(Some(Message::new_bulk_string(string.clone())))
             }
             _ => Ok(Some(Message::SimpleError(SimpleError {
                 string: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
             }))),
         }
     } else {
-        Ok(Some(Message::BulkString(BulkString {
-            length: -1,
-            string: String::new(),
-        })))
+        Ok(Some(Message::NullBulkString))
     }
 }
 

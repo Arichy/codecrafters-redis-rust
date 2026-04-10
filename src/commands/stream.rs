@@ -6,7 +6,7 @@ use tokio::sync::Notify;
 use tokio::time::timeout;
 
 use crate::commands::CommandContext;
-use crate::message::{Array, BulkString, Message, SimpleError};
+use crate::message::{Message, SimpleError};
 use crate::rdb::{StreamId, StreamValue, Value, ValueType};
 
 pub async fn xadd(
@@ -125,10 +125,7 @@ pub async fn xadd(
     if ctx.is_slave {
         Ok(None)
     } else {
-        Ok(Some(Message::BulkString(BulkString {
-            length: id_string.len() as isize,
-            string: id_string,
-        })))
+        Ok(Some(Message::new_bulk_string(id_string)))
     }
 }
 
@@ -209,7 +206,7 @@ pub async fn xrange(ctx: &CommandContext, args: &[String]) -> Result<Option<Mess
         vec![]
     };
 
-    Ok(Some(Message::Array(Array { items })))
+    Ok(Some(Message::new_array(items)))
 }
 
 pub async fn xread(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -366,15 +363,10 @@ async fn read_streams(
                     };
 
                     if !items.is_empty() {
-                        result_streams.push(Message::Array(Array {
-                            items: vec![
-                                Message::BulkString(BulkString {
-                                    length: key.len() as isize,
-                                    string: key.clone(),
-                                }),
-                                Message::Array(Array { items }),
-                            ],
-                        }));
+                        result_streams.push(Message::new_array(vec![
+                            Message::new_bulk_string(key.clone()),
+                            Message::new_array(items),
+                        ]));
                     }
                 }
             }
@@ -382,17 +374,12 @@ async fn read_streams(
     }
 
     if result_streams.is_empty() {
-        Ok(Message::BulkString(BulkString {
-            length: -1,
-            string: String::new(),
-        }))
+        Ok(Message::NullBulkString)
     } else {
-        Ok(Message::Array(Array {
-            items: result_streams,
-        }))
+        Ok(Message::new_array(result_streams))
     }
 }
 
 fn is_empty_result(msg: &Message) -> bool {
-    matches!(msg, Message::BulkString(bs) if bs.length == -1)
+    matches!(msg, Message::NullBulkString)
 }

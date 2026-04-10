@@ -1,9 +1,8 @@
 use anyhow::Result;
 
 use crate::commands::CommandContext;
-use crate::message::{Array, BulkString, Integer, Message, SimpleError};
-use crate::rdb::zset::ZSet;
-use crate::rdb::{SortedSet, Value, ValueType};
+use crate::core::zset::{zset_add, zset_card, zset_range, zset_rank, zset_rem, zset_score};
+use crate::message::{Integer, Message, SimpleError};
 
 pub async fn zadd(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
     if args.len() < 3 {
@@ -20,37 +19,7 @@ pub async fn zadd(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
     let db_index = *ctx.selected_db.read().await;
     let db = rdb.get_db_mut(db_index)?;
 
-    let count = match db.get_sorted_set(key.clone()) {
-        Ok(Some(sorted_set)) => {
-            if sorted_set.zset.add(member.clone(), score) {
-                1
-            } else {
-                0
-            }
-        }
-        Ok(None) => {
-            // Key expired or doesn't exist, create new
-            db.map.remove(key);
-            let mut zset = ZSet::new();
-            zset.add(member.clone(), score);
-            db.map.insert(
-                key.clone(),
-                Value {
-                    expiry: None,
-                    value: ValueType::SortedSet(SortedSet { zset }),
-                },
-            );
-            1
-        }
-        Err(e) => {
-            if let Ok(e) = e.downcast::<SimpleError>() {
-                return Ok(Some(Message::SimpleError(e)));
-            }
-            return Ok(Some(Message::SimpleError(SimpleError {
-                string: "ERR unknown error".to_string(),
-            })));
-        }
-    };
+    let count = zset_add(db, key, member, score)?;
 
     Ok(Some(Message::Integer(Integer { value: count })))
 }
@@ -69,21 +38,9 @@ pub async fn zrank(ctx: &CommandContext, args: &[String]) -> Result<Option<Messa
     let db_index = *ctx.selected_db.read().await;
     let db = rdb.get_db_mut(db_index)?;
 
-    match db.get_sorted_set(key.clone()) {
-        Ok(Some(sorted_set)) => {
-            if let Some(rank) = sorted_set.zset.rank(member) {
-                Ok(Some(Message::Integer(Integer { value: rank as i64 })))
-            } else {
-                Ok(Some(Message::BulkString(BulkString {
-                    length: -1,
-                    string: String::new(),
-                })))
-            }
-        }
-        _ => Ok(Some(Message::BulkString(BulkString {
-            length: -1,
-            string: String::new(),
-        }))),
+    match zset_rank(db, key, member)? {
+        Some(rank) => Ok(Some(Message::Integer(Integer { value: rank as i64 }))),
+        None => Ok(Some(Message::NullBulkString)),
     }
 }
 
@@ -102,20 +59,11 @@ pub async fn zrange(ctx: &CommandContext, args: &[String]) -> Result<Option<Mess
     let db_index = *ctx.selected_db.read().await;
     let db = rdb.get_db_mut(db_index)?;
 
-    let result = match db.get_sorted_set(key.clone()) {
-        Ok(Some(sorted_set)) => sorted_set.zset.range(start, end),
-        _ => vec![],
-    };
+    let result = zset_range(db, key, start, end)?;
 
-    let items = result
-        .iter()
-        .map(|item| Message::BulkString(BulkString {
-            length: item.len() as isize,
-            string: item.to_string(),
-        }))
-        .collect();
-
-    Ok(Some(Message::Array(Array { items })))
+    Ok(Some(Message::new_array(
+        result.iter().map(|item| Message::new_bulk_string(item.clone())).collect()
+    )))
 }
 
 pub async fn zcard(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -131,14 +79,9 @@ pub async fn zcard(ctx: &CommandContext, args: &[String]) -> Result<Option<Messa
     let db_index = *ctx.selected_db.read().await;
     let db = rdb.get_db_mut(db_index)?;
 
-    let count = match db.get_sorted_set(key.clone()) {
-        Ok(Some(sorted_set)) => sorted_set.zset.len(),
-        _ => 0,
-    };
+    let count = zset_card(db, key)?;
 
-    Ok(Some(Message::Integer(Integer {
-        value: count as i64,
-    })))
+    Ok(Some(Message::Integer(Integer { value: count as i64 })))
 }
 
 pub async fn zscore(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -155,24 +98,9 @@ pub async fn zscore(ctx: &CommandContext, args: &[String]) -> Result<Option<Mess
     let db_index = *ctx.selected_db.read().await;
     let db = rdb.get_db_mut(db_index)?;
 
-    match db.get_sorted_set(key.clone()) {
-        Ok(Some(sorted_set)) => {
-            if let Some(score) = sorted_set.zset.score(member) {
-                Ok(Some(Message::BulkString(BulkString {
-                    length: score.to_string().len() as isize,
-                    string: score.to_string(),
-                })))
-            } else {
-                Ok(Some(Message::BulkString(BulkString {
-                    length: -1,
-                    string: String::new(),
-                })))
-            }
-        }
-        _ => Ok(Some(Message::BulkString(BulkString {
-            length: -1,
-            string: String::new(),
-        }))),
+    match zset_score(db, key, member)? {
+        Some(score) => Ok(Some(Message::new_bulk_string(score.to_string()))),
+        None => Ok(Some(Message::NullBulkString)),
     }
 }
 
@@ -190,18 +118,7 @@ pub async fn zrem(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
     let db_index = *ctx.selected_db.read().await;
     let db = rdb.get_db_mut(db_index)?;
 
-    let count = match db.get_sorted_set(key.clone()) {
-        Ok(Some(sorted_set)) => {
-            if sorted_set.zset.rem(member.clone()) {
-                1
-            } else {
-                0
-            }
-        }
-        _ => 0,
-    };
+    let count = zset_rem(db, key, member)?;
 
-    Ok(Some(Message::Integer(Integer {
-        value: count as i64,
-    })))
+    Ok(Some(Message::Integer(Integer { value: count })))
 }

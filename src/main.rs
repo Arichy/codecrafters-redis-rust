@@ -16,7 +16,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio_util::codec::Framed;
 
 use codecrafters_redis::commands::{self, CommandContext, ServerConfig};
-use codecrafters_redis::message::{Array, BulkString, Integer, Message, MessageFramer, SimpleError, SimpleString};
+use codecrafters_redis::message::{Integer, Message, MessageFramer, SimpleError, SimpleString};
 use codecrafters_redis::rdb::RDB;
 use codecrafters_redis::server::{ReplicationState, Role, Server};
 
@@ -224,7 +224,7 @@ async fn handle_exec(
     }
 
     *in_transaction = false;
-    send_response(writer, Message::Array(Array { items: results })).await
+    send_response(writer, Message::new_array(results)).await
 }
 
 /// Handle subscribe mode command filtering
@@ -463,46 +463,38 @@ async fn connect_to_master(
 
     // Send PING
     writer
-        .send(Message::Array(Array {
-            items: vec![Message::new_bulk_string("PING".to_string())],
-        }))
+        .send(Message::new_array(vec![Message::new_bulk_string("PING".to_string())]))
         .await?;
     reader.next().await;
 
     // Send REPLCONF listening-port
     let port = args.read().await.port;
     writer
-        .send(Message::Array(Array {
-            items: vec![
-                Message::new_bulk_string("REPLCONF".to_string()),
-                Message::new_bulk_string("listening-port".to_string()),
-                Message::new_bulk_string(port.to_string()),
-            ],
-        }))
+        .send(Message::new_array(vec![
+            Message::new_bulk_string("REPLCONF".to_string()),
+            Message::new_bulk_string("listening-port".to_string()),
+            Message::new_bulk_string(port.to_string()),
+        ]))
         .await?;
     reader.next().await;
 
     // Send REPLCONF capa psync2
     writer
-        .send(Message::Array(Array {
-            items: vec![
-                Message::new_bulk_string("REPLCONF".to_string()),
-                Message::new_bulk_string("capa".to_string()),
-                Message::new_bulk_string("psync2".to_string()),
-            ],
-        }))
+        .send(Message::new_array(vec![
+            Message::new_bulk_string("REPLCONF".to_string()),
+            Message::new_bulk_string("capa".to_string()),
+            Message::new_bulk_string("psync2".to_string()),
+        ]))
         .await?;
     reader.next().await;
 
     // Send PSYNC
     writer
-        .send(Message::Array(Array {
-            items: vec![
-                Message::new_bulk_string("PSYNC".to_string()),
-                Message::new_bulk_string("?".to_string()),
-                Message::new_bulk_string("-1".to_string()),
-            ],
-        }))
+        .send(Message::new_array(vec![
+            Message::new_bulk_string("PSYNC".to_string()),
+            Message::new_bulk_string("?".to_string()),
+            Message::new_bulk_string("-1".to_string()),
+        ]))
         .await?;
     reader.next().await; // FULLRESYNC response
     reader.next().await; // RDB file

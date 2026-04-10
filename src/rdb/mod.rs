@@ -15,7 +15,7 @@ use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 pub mod zset;
 
 use crate::{
-    message::{Array, BulkString, Message, SimpleError},
+    message::{Message, SimpleError},
     rdb::zset::ZSet,
 };
 
@@ -392,25 +392,14 @@ impl StreamValue {
 
         record.iter().for_each(|(k, v)| {
             if k.as_str() == "id" {
-                id = Some(Message::BulkString(BulkString {
-                    length: v.len() as isize,
-                    string: v.to_string(),
-                }));
+                id = Some(Message::new_bulk_string(v.to_string()));
             } else {
-                entries.push(Message::BulkString(BulkString {
-                    length: k.len() as isize,
-                    string: k.to_string(),
-                }));
-                entries.push(Message::BulkString(BulkString {
-                    length: v.len() as isize,
-                    string: v.to_string(),
-                }));
+                entries.push(Message::new_bulk_string(k.to_string()));
+                entries.push(Message::new_bulk_string(v.to_string()));
             }
         });
 
-        Message::Array(Array {
-            items: vec![id.unwrap(), Message::Array(Array { items: entries })],
-        })
+        Message::new_array(vec![id.unwrap(), Message::new_array(entries)])
     }
 
     pub fn get_by_range(&self, range: impl RangeBounds<usize>) -> Vec<Message> {

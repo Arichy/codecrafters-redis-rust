@@ -4,13 +4,12 @@ use crate::{
             decode::{decode, Coordinates},
             encode::encode,
         },
-        sorted_set::{zadd, zrange, zscore},
         CommandContext,
     },
-    message::{Array, BulkString, Message, SimpleError},
-    rdb::Value,
+    core::zset::{zset_add, zset_range, zset_score},
+    message::{Integer, Message, SimpleError},
 };
-use anyhow::{anyhow, Context as AnyhowContext, Result};
+use anyhow::{anyhow, Result};
 
 mod decode;
 mod distance;
@@ -42,48 +41,42 @@ pub async fn add(ctx: &CommandContext, args: &[String]) -> Result<Option<Message
 
     let score = encode(la, lo);
 
-    let zadd_args = &[key.to_string(), score.to_string(), member.to_string()];
+    let mut rdb = ctx.server.rdb.write().await;
+    let db_index = *ctx.selected_db.read().await;
+    let db = rdb.get_db_mut(db_index)?;
 
-    zadd(ctx, zadd_args).await
+    let count = zset_add(db, key, member, score as f64)?;
+
+    Ok(Some(Message::Integer(Integer { value: count })))
 }
 
 pub async fn pos(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
     let key = &args[0];
     let members = &args[1..];
 
+    let mut rdb = ctx.server.rdb.write().await;
+    let db_index = *ctx.selected_db.read().await;
+    let db = rdb.get_db_mut(db_index)?;
+
     let mut items = Vec::with_capacity(members.len());
 
     for member in members {
-        let zscore_args = &[key.clone(), member.clone()];
-        match zscore(ctx, zscore_args).await? {
-            Some(Message::BulkString(BulkString { length, string })) => {
-                if length == -1 {
-                    items.push(Message::NullArray);
-                } else {
-                    let score = string.parse::<u64>()?;
-                    let coordinates = decode(score);
-                    let la_str = coordinates.latitude.to_string();
-                    let lo_str = coordinates.longitude.to_string();
-                    items.push(Message::Array(Array {
-                        items: vec![
-                            Message::BulkString(BulkString {
-                                length: lo_str.len() as isize,
-                                string: lo_str,
-                            }),
-                            Message::BulkString(BulkString {
-                                length: la_str.len() as isize,
-                                string: la_str,
-                            }),
-                        ],
-                    }));
-                }
+        match zset_score(db, key, member)? {
+            Some(score) => {
+                let score_int = score as u64;
+                let coordinates = decode(score_int);
+                items.push(Message::new_array(vec![
+                    Message::new_bulk_string(coordinates.longitude.to_string()),
+                    Message::new_bulk_string(coordinates.latitude.to_string()),
+                ]));
             }
-            Some(msg) => return Ok(Some(msg)),
-            None => unreachable!(),
+            None => {
+                items.push(Message::NullArray);
+            }
         }
     }
 
-    Ok(Some(Message::Array(Array { items })))
+    Ok(Some(Message::new_array(items)))
 }
 
 pub async fn distance(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -91,67 +84,36 @@ pub async fn distance(ctx: &CommandContext, args: &[String]) -> Result<Option<Me
     let member1 = &args[1];
     let member2 = &args[2];
 
-    let res = pos(ctx, args).await?.expect("Cannot be None.");
-    let Message::Array(Array { mut items }) = res else {
-        unreachable!();
+    let mut rdb = ctx.server.rdb.write().await;
+    let db_index = *ctx.selected_db.read().await;
+    let db = rdb.get_db_mut(db_index)?;
+
+    let score1 = zset_score(db, key, member1)?;
+    let score2 = zset_score(db, key, member2)?;
+
+    // Check if either member doesn't exist
+    let Some(score1) = score1 else {
+        return Ok(Some(Message::NullBulkString));
+    };
+    let Some(score2) = score2 else {
+        return Ok(Some(Message::NullBulkString));
     };
 
-    let first = items.pop().unwrap();
-    let second = items.pop().unwrap();
-
-    let Message::Array(Array { items: co1 }) = first else {
-        return Ok(Some(Message::NullArray));
-    };
-    let Message::Array(Array { items: co2 }) = second else {
-        return Ok(Some(Message::NullArray));
-    };
-
-    let Message::BulkString(BulkString {
-        length,
-        string: lo1_str,
-    }) = &co1[0]
-    else {
-        unreachable!()
-    };
-    let Message::BulkString(BulkString {
-        length,
-        string: la1_str,
-    }) = &co1[1]
-    else {
-        unreachable!()
-    };
-
-    let Message::BulkString(BulkString {
-        length,
-        string: lo2_str,
-    }) = &co2[0]
-    else {
-        unreachable!()
-    };
-    let Message::BulkString(BulkString {
-        length,
-        string: la2_str,
-    }) = &co2[1]
-    else {
-        unreachable!()
-    };
+    let co1 = decode(score1 as u64);
+    let co2 = decode(score2 as u64);
 
     let dist = distance::haversine(
         Coordinates {
-            latitude: la1_str.parse()?,
-            longitude: lo1_str.parse()?,
+            latitude: co1.latitude,
+            longitude: co1.longitude,
         },
         Coordinates {
-            latitude: la2_str.parse()?,
-            longitude: lo2_str.parse()?,
+            latitude: co2.latitude,
+            longitude: co2.longitude,
         },
     );
 
-    let dist_str = dist.to_string();
-    Ok(Some(Message::BulkString(BulkString {
-        length: dist_str.len() as isize,
-        string: dist_str,
-    })))
+    Ok(Some(Message::new_bulk_string(dist.to_string())))
 }
 
 pub async fn search(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -177,67 +139,33 @@ pub async fn search(ctx: &CommandContext, args: &[String]) -> Result<Option<Mess
         _ => todo!(),
     };
 
+    let mut rdb = ctx.server.rdb.write().await;
+    let db_index = *ctx.selected_db.read().await;
+    let db = rdb.get_db_mut(db_index)?;
+
+    let members = zset_range(db, key, 0, -1)?;
+
     let mut ret = vec![];
-    let Message::Array(Array { items }) =
-        zrange(ctx, &[key.to_string(), "0".to_string(), "-1".to_string()])
-            .await?
-            .unwrap()
-    else {
-        unreachable!()
-    };
-    for item in &items {
-        let Message::BulkString(BulkString {
-            length,
-            string: member,
-        }) = item
-        else {
-            unreachable!();
-        };
+    for member in &members {
+        if let Some(score) = zset_score(db, key, member)? {
+            let coordinates = decode(score as u64);
 
-        let member_pos = pos(ctx, &[key.to_string(), member.to_string()])
-            .await?
-            .unwrap();
+            let dist = distance::haversine(
+                Coordinates {
+                    latitude: la,
+                    longitude: lo,
+                },
+                Coordinates {
+                    latitude: coordinates.latitude,
+                    longitude: coordinates.longitude,
+                },
+            );
 
-        let Message::Array(Array { items }) = member_pos else {
-            unreachable!()
-        };
-        let member_pos = &items[0];
-        let Message::Array(Array { items }) = member_pos else {
-            unreachable!()
-        };
-        let Message::BulkString(BulkString {
-            length,
-            string: member_lo,
-        }) = &items[0]
-        else {
-            unreachable!()
-        };
-        let Message::BulkString(BulkString {
-            length,
-            string: member_la,
-        }) = &items[1]
-        else {
-            unreachable!()
-        };
-
-        let dist = distance::haversine(
-            Coordinates {
-                latitude: la,
-                longitude: lo,
-            },
-            Coordinates {
-                latitude: member_la.parse()?,
-                longitude: member_lo.parse()?,
-            },
-        );
-
-        if dist <= radius {
-            ret.push(Message::BulkString(BulkString {
-                length: member.len() as isize,
-                string: member.to_string(),
-            }));
+            if dist <= radius {
+                ret.push(Message::new_bulk_string(member.clone()));
+            }
         }
     }
 
-    Ok(Some(Message::Array(Array { items: ret })))
+    Ok(Some(Message::new_array(ret)))
 }

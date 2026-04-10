@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio::time::{timeout, Instant};
 
 use crate::commands::CommandContext;
-use crate::message::{Array, BulkString, Integer, Message, SimpleError, SimpleString};
+use crate::message::{Integer, Message, SimpleError, SimpleString};
 use crate::rdb::ValueType;
 use crate::server::Role;
 
@@ -35,10 +35,7 @@ pub async fn echo(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
     }
 
     let echo_str = &args[0];
-    Ok(Some(Message::BulkString(BulkString {
-        length: echo_str.len() as isize,
-        string: echo_str.clone(),
-    })))
+    Ok(Some(Message::new_bulk_string(echo_str.clone())))
 }
 
 pub async fn info(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -54,10 +51,7 @@ pub async fn info(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
 
     let info_string = info_list.join("\r\n");
 
-    Ok(Some(Message::BulkString(BulkString {
-        length: info_string.len() as isize,
-        string: info_string,
-    })))
+    Ok(Some(Message::new_bulk_string(info_string)))
 }
 
 pub async fn config(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -83,8 +77,8 @@ pub async fn config(ctx: &CommandContext, args: &[String]) -> Result<Option<Mess
                         .map(|p| p.to_string_lossy().to_string())
                         .unwrap_or_default();
                     vec![
-                        Message::BulkString(BulkString { length: 3, string: "dir".to_string() }),
-                        Message::BulkString(BulkString { length: dir_str.len() as isize, string: dir_str }),
+                        Message::new_bulk_string("dir".to_string()),
+                        Message::new_bulk_string(dir_str),
                     ]
                 }
                 "dbfilename" => {
@@ -92,14 +86,14 @@ pub async fn config(ctx: &CommandContext, args: &[String]) -> Result<Option<Mess
                         .map(|p| p.to_string_lossy().to_string())
                         .unwrap_or_default();
                     vec![
-                        Message::BulkString(BulkString { length: 10, string: "dbfilename".to_string() }),
-                        Message::BulkString(BulkString { length: filename_str.len() as isize, string: filename_str }),
+                        Message::new_bulk_string("dbfilename".to_string()),
+                        Message::new_bulk_string(filename_str),
                     ]
                 }
                 _ => vec![],
             };
 
-            Ok(Some(Message::Array(Array { items })))
+            Ok(Some(Message::new_array(items)))
         }
         _ => Ok(Some(Message::SimpleError(SimpleError {
             string: format!("ERR unknown subcommand '{}'", subcommand),
@@ -121,13 +115,10 @@ pub async fn keys(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
     let items: Vec<Message> = db
         .map
         .keys()
-        .map(|k| Message::BulkString(BulkString {
-            length: k.len() as isize,
-            string: k.clone(),
-        }))
+        .map(|k| Message::new_bulk_string(k.clone()))
         .collect();
 
-    Ok(Some(Message::Array(Array { items })))
+    Ok(Some(Message::new_array(items)))
 }
 
 pub async fn type_cmd(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -186,22 +177,11 @@ pub async fn replconf(
         let offset = repl.slave_offset - message.length()?;
         drop(repl);
 
-        return Ok(Some(Message::Array(Array {
-            items: vec![
-                Message::BulkString(BulkString {
-                    length: 8,
-                    string: "REPLCONF".to_string(),
-                }),
-                Message::BulkString(BulkString {
-                    length: 3,
-                    string: "ACK".to_string(),
-                }),
-                Message::BulkString(BulkString {
-                    length: offset.to_string().len() as isize,
-                    string: offset.to_string(),
-                }),
-            ],
-        })));
+        return Ok(Some(Message::new_array(vec![
+            Message::new_bulk_string("REPLCONF".to_string()),
+            Message::new_bulk_string("ACK".to_string()),
+            Message::new_bulk_string(offset.to_string()),
+        ])));
     }
 
     // Master side: replica sent ACK with its offset
@@ -261,13 +241,11 @@ pub async fn wait(
     }
 
     // Send GETACK to all replicas to trigger their offset reports
-    let getack_msg = Message::Array(Array {
-        items: vec![
-            Message::BulkString(BulkString { length: 8, string: "REPLCONF".to_string() }),
-            Message::BulkString(BulkString { length: 6, string: "GETACK".to_string() }),
-            Message::BulkString(BulkString { length: 1, string: "*".to_string() }),
-        ],
-    });
+    let getack_msg = Message::new_array(vec![
+        Message::new_bulk_string("REPLCONF".to_string()),
+        Message::new_bulk_string("GETACK".to_string()),
+        Message::new_bulk_string("*".to_string()),
+    ]);
     ctx.server.replicas.broadcast(&getack_msg).await;
 
     let wait_notify = ctx.server.replication.read().await.wait_notify.clone();
