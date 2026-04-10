@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use crate::commands::CommandContext;
-use crate::message::{Integer, Message, SimpleError, SimpleString};
+use crate::message::{Message, SimpleError};
 use crate::rdb::{StringValue, Value, ValueType};
 
 pub async fn get(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -92,9 +92,7 @@ pub async fn set(ctx: &CommandContext, args: &[String], message: &Message) -> Re
     if ctx.is_slave {
         Ok(None)
     } else {
-        Ok(Some(Message::SimpleString(SimpleString {
-            string: "OK".to_string(),
-        })))
+        Ok(Some(Message::new_simple_string("OK")))
     }
 }
 
@@ -141,7 +139,7 @@ pub async fn incr(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
         };
 
         if let Some(n) = next_int {
-            Ok(Some(Message::Integer(Integer { value: n })))
+            Ok(Some(Message::new_integer(n)))
         } else {
             Ok(Some(Message::SimpleError(SimpleError {
                 string: "ERR value is not an integer or out of range".to_string(),

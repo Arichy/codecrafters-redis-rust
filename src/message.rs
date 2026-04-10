@@ -42,6 +42,18 @@ impl Message {
         Self::Array(Array { items })
     }
 
+    pub fn new_simple_string(string: impl Into<String>) -> Self {
+        Self::SimpleString(SimpleString { string: string.into() })
+    }
+
+    pub fn new_integer(value: i64) -> Self {
+        Self::Integer(Integer { value })
+    }
+
+    pub fn new_error(string: impl Into<String>) -> Self {
+        Self::SimpleError(SimpleError { string: string.into() })
+    }
+
     pub fn as_bulk_str(&self) -> Option<&str> {
         match self {
             Message::BulkString(BulkString { string }) => Some(string),
@@ -54,6 +66,20 @@ impl Message {
         match self {
             Message::Array(Array { items }) => Some(items),
             Message::NullArray => None,
+            _ => None,
+        }
+    }
+
+    pub fn as_simple_str(&self) -> Option<&str> {
+        match self {
+            Message::SimpleString(SimpleString { string }) => Some(string),
+            _ => None,
+        }
+    }
+
+    pub fn as_integer(&self) -> Option<i64> {
+        match self {
+            Message::Integer(Integer { value }) => Some(*value),
             _ => None,
         }
     }

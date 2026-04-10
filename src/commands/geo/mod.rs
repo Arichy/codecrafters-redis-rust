@@ -7,7 +7,7 @@ use crate::{
         CommandContext,
     },
     core::zset::{zset_add, zset_range, zset_score},
-    message::{Integer, Message, SimpleError},
+    message::{Message, SimpleError},
 };
 use anyhow::{anyhow, Result};
 
@@ -43,7 +43,7 @@ pub async fn add(ctx: &CommandContext, args: &[String]) -> Result<Option<Message
 
     let count = ctx.with_db_mut(|db| zset_add(db, key, member, score as f64)).await?;
 
-    Ok(Some(Message::Integer(Integer { value: count })))
+    Ok(Some(Message::new_integer(count)))
 }
 
 pub async fn pos(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {

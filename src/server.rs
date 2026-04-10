@@ -1,7 +1,9 @@
+use dashmap::DashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify, RwLock};
 
+use crate::commands::auth::User;
 use crate::message::{Message, MessageWriter};
 use crate::rdb::RDB;
 use futures_util::SinkExt;
@@ -19,6 +21,8 @@ pub struct Server {
     pub replication: Arc<RwLock<ReplicationState>>,
     /// Replica connection manager
     pub replicas: Arc<ReplicaManager>,
+    /// Users
+    pub users: Arc<DashMap<String, User>>,
 }
 
 impl Server {
@@ -29,6 +33,7 @@ impl Server {
             pubsub: Arc::new(PubSubManager::new()),
             replication: Arc::new(RwLock::new(replication_state)),
             replicas: Arc::new(ReplicaManager::new()),
+            users: Arc::new(DashMap::new()),
         }
     }
 }
@@ -54,7 +59,10 @@ impl BlockingManager {
     pub async fn register_list_waiter(&self, key: String) -> Arc<Notify> {
         let notify = Arc::new(Notify::new());
         let mut waiters = self.list_waiters.lock().await;
-        waiters.entry(key).or_insert_with(Vec::new).push(notify.clone());
+        waiters
+            .entry(key)
+            .or_insert_with(Vec::new)
+            .push(notify.clone());
         notify
     }
 
@@ -76,7 +84,10 @@ impl BlockingManager {
     pub async fn register_stream_waiter(&self, key: String) -> Arc<Notify> {
         let notify = Arc::new(Notify::new());
         let mut waiters = self.stream_waiters.lock().await;
-        waiters.entry(key).or_insert_with(Vec::new).push(notify.clone());
+        waiters
+            .entry(key)
+            .or_insert_with(Vec::new)
+            .push(notify.clone());
         notify
     }
 

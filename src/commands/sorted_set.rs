@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::commands::CommandContext;
 use crate::core::zset::{zset_add, zset_card, zset_range, zset_rank, zset_rem, zset_score};
-use crate::message::{Integer, Message, SimpleError};
+use crate::message::{Message, SimpleError};
 
 pub async fn zadd(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
     if args.len() < 3 {
@@ -17,7 +17,7 @@ pub async fn zadd(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
 
     let count = ctx.with_db_mut(|db| zset_add(db, key, member, score)).await?;
 
-    Ok(Some(Message::Integer(Integer { value: count })))
+    Ok(Some(Message::new_integer(count)))
 }
 
 pub async fn zrank(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -33,7 +33,7 @@ pub async fn zrank(ctx: &CommandContext, args: &[String]) -> Result<Option<Messa
     let rank = ctx.with_db_mut(|db| zset_rank(db, key, member)).await?;
 
     match rank {
-        Some(rank) => Ok(Some(Message::Integer(Integer { value: rank as i64 }))),
+        Some(rank) => Ok(Some(Message::new_integer(rank as i64))),
         None => Ok(Some(Message::NullBulkString)),
     }
 }
@@ -67,7 +67,7 @@ pub async fn zcard(ctx: &CommandContext, args: &[String]) -> Result<Option<Messa
 
     let count = ctx.with_db_mut(|db| zset_card(db, key)).await?;
 
-    Ok(Some(Message::Integer(Integer { value: count as i64 })))
+    Ok(Some(Message::new_integer(count as i64)))
 }
 
 pub async fn zscore(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -100,5 +100,5 @@ pub async fn zrem(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
 
     let count = ctx.with_db_mut(|db| zset_rem(db, key, member)).await?;
 
-    Ok(Some(Message::Integer(Integer { value: count })))
+    Ok(Some(Message::new_integer(count)))
 }

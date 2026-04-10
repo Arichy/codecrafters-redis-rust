@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio::time::{timeout, Instant};
 
 use crate::commands::CommandContext;
-use crate::message::{Integer, Message, SimpleError, SimpleString};
+use crate::message::{Message, SimpleError};
 use crate::rdb::ValueType;
 use crate::server::Role;
 
@@ -21,9 +21,7 @@ pub async fn ping(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
             Message::new_bulk_string("".to_string()),
         ])))
     } else {
-        Ok(Some(Message::SimpleString(SimpleString {
-            string: "PONG".to_string(),
-        })))
+        Ok(Some(Message::new_simple_string("PONG")))
     }
 }
 
@@ -138,9 +136,7 @@ pub async fn type_cmd(ctx: &CommandContext, args: &[String]) -> Result<Option<Me
         } else {
             "none"
         };
-        Ok(Some(Message::SimpleString(SimpleString {
-            string: type_str.to_string(),
-        })))
+        Ok(Some(Message::new_simple_string(type_str)))
     }).await
 }
 
@@ -150,9 +146,7 @@ pub async fn replconf(
     message: &Message,
 ) -> Result<Option<Message>> {
     if args.is_empty() {
-        return Ok(Some(Message::SimpleString(SimpleString {
-            string: "OK".to_string(),
-        })));
+        return Ok(Some(Message::new_simple_string("OK")));
     }
 
     let subcommand = args[0].to_lowercase();
@@ -160,9 +154,7 @@ pub async fn replconf(
     // Master receives GETACK from client (tester) - forward to replicas
     if !ctx.is_slave && subcommand == "getack" {
         ctx.server.replicas.broadcast(message).await;
-        return Ok(Some(Message::SimpleString(SimpleString {
-            string: "OK".to_string(),
-        })));
+        return Ok(Some(Message::new_simple_string("OK")));
     }
 
     // Slave side: master sent GETACK, generate ACK response
@@ -189,9 +181,7 @@ pub async fn replconf(
         return Ok(None); // Don't send response to ACK
     }
 
-    Ok(Some(Message::SimpleString(SimpleString {
-        string: "OK".to_string(),
-    })))
+    Ok(Some(Message::new_simple_string("OK")))
 }
 
 pub async fn psync(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -220,17 +210,13 @@ pub async fn wait(
         if repl.expected_offset == 0 {
             let count = repl.total_replica_count;
             drop(repl);
-            return Ok(Some(Message::Integer(Integer {
-                value: count as i64,
-            })));
+            return Ok(Some(Message::new_integer(count as i64)));
         }
         // Already fully acked
         if repl.acked_replica_count >= repl.total_replica_count && repl.total_replica_count > 0 {
             let count = repl.total_replica_count;
             drop(repl);
-            return Ok(Some(Message::Integer(Integer {
-                value: count as i64,
-            })));
+            return Ok(Some(Message::new_integer(count as i64)));
         }
     }
 
@@ -252,9 +238,7 @@ pub async fn wait(
         if repl.acked_replica_count >= numreplicas {
             let count = repl.acked_replica_count;
             drop(repl);
-            return Ok(Some(Message::Integer(Integer {
-                value: count as i64,
-            })));
+            return Ok(Some(Message::new_integer(count as i64)));
         }
         drop(repl);
 
@@ -264,22 +248,16 @@ pub async fn wait(
 
         if remaining.is_zero() {
             let repl = ctx.server.replication.read().await;
-            return Ok(Some(Message::Integer(Integer {
-                value: repl.acked_replica_count as i64,
-            })));
+            return Ok(Some(Message::new_integer(repl.acked_replica_count as i64)));
         }
 
         if timeout(remaining, wait_notify.notified()).await.is_err() {
             let repl = ctx.server.replication.read().await;
-            return Ok(Some(Message::Integer(Integer {
-                value: repl.acked_replica_count as i64,
-            })));
+            return Ok(Some(Message::new_integer(repl.acked_replica_count as i64)));
         }
     }
 }
 
 pub async fn command(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
-    Ok(Some(Message::SimpleString(SimpleString {
-        string: "OK".to_string(),
-    })))
+    Ok(Some(Message::new_simple_string("OK")))
 }

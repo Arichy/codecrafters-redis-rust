@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 
 use crate::commands::CommandContext;
-use crate::message::{Integer, Message, SimpleError};
+use crate::message::{Message, SimpleError};
 use crate::rdb::{ListValue, Value, ValueType};
 
 pub async fn lpush(ctx: &CommandContext, args: &[String], message: &Message) -> Result<Option<Message>> {
@@ -58,7 +58,7 @@ pub async fn lpush(ctx: &CommandContext, args: &[String], message: &Message) -> 
         ctx.server.replicas.broadcast(message).await;
     }
 
-    Ok(Some(Message::Integer(Integer { value: len as i64 })))
+    Ok(Some(Message::new_integer(len as i64)))
 }
 
 pub async fn rpush(ctx: &CommandContext, args: &[String], message: &Message) -> Result<Option<Message>> {
@@ -112,7 +112,7 @@ pub async fn rpush(ctx: &CommandContext, args: &[String], message: &Message) -> 
         ctx.server.replicas.broadcast(message).await;
     }
 
-    Ok(Some(Message::Integer(Integer { value: len as i64 })))
+    Ok(Some(Message::new_integer(len as i64)))
 }
 
 pub async fn lpop(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -153,16 +153,14 @@ pub async fn llen(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
     if let Some(value) = db.map.get(key) {
         match &value.value {
             ValueType::ListValue(list_value) => {
-                Ok(Some(Message::Integer(Integer {
-                    value: list_value.list.len() as i64,
-                })))
+                Ok(Some(Message::new_integer(list_value.list.len() as i64)))
             }
             _ => Ok(Some(Message::SimpleError(SimpleError {
                 string: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
             }))),
         }
     } else {
-        Ok(Some(Message::Integer(Integer { value: 0 })))
+        Ok(Some(Message::new_integer(0)))
     }
 }
 
