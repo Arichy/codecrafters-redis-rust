@@ -411,9 +411,23 @@ impl WatchingManager {
     /// Notify all clients watching a key that it has changed
     pub fn notify(&self, key: &str) {
         if let Some((_, watchers)) = self.watchers.remove(key) {
-            for (_, is_dirty) in watchers {
-                // Use Release to ensure database writes are visible to observers
+            // Mark all watching clients as dirty
+            for (client_id, is_dirty) in watchers {
                 is_dirty.store(true, std::sync::atomic::Ordering::Release);
+
+                // Remove this key from each client's watched keys set
+                // to keep client_keys in sync with watchers
+                let should_remove_client = {
+                    if let Some(mut entry) = self.client_keys.get_mut(&client_id) {
+                        entry.remove(key);
+                        entry.is_empty()
+                    } else {
+                        false
+                    }
+                };
+                if should_remove_client {
+                    self.client_keys.remove(&client_id);
+                }
             }
         }
     }
