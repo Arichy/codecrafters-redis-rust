@@ -117,6 +117,7 @@ pub async fn execute(
         "geosearch" => geo::search(ctx, args).await,
 
         "acl" => auth::acl(ctx, args).await,
+        "auth" => auth::auth(ctx, args).await,
         _ => Ok(None),
     }
 }

@@ -24,7 +24,7 @@ async fn whoami(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>
     Ok(Some(Message::new_bulk_string("default".to_string())))
 }
 
-pub async fn getuser(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
+async fn getuser(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
     let user = &args[1];
 
     let passwords = match ctx.server.users.get(user) {
@@ -51,19 +51,12 @@ pub async fn getuser(ctx: &CommandContext, args: &[String]) -> Result<Option<Mes
     ])))
 }
 
-pub async fn setuser(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
+async fn setuser(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
     let username = &args[1];
     let rule = &args[2];
 
     if rule.starts_with('>') {
         let new_password = &rule[1..];
-        let mut hasher = Sha256::new();
-
-        hasher.update(new_password);
-
-        let result = hasher.finalize();
-
-        let hex_string = hex::encode(result);
 
         let mut entry = ctx
             .server
@@ -74,9 +67,43 @@ pub async fn setuser(ctx: &CommandContext, args: &[String]) -> Result<Option<Mes
                 passwords: vec![],
             });
 
-        entry.value_mut().passwords.push(hex_string);
+        entry
+            .value_mut()
+            .passwords
+            .push(hash_password(new_password));
         Ok(Some(Message::new_simple_string("OK")))
     } else {
         Err(anyhow!("Unsupported rule {rule}"))
     }
+}
+
+pub async fn auth(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
+    let username = &args[0];
+    let password = &args[1];
+
+    match ctx.server.users.get(username) {
+        Some(user) => {
+            let password = hash_password(password);
+            if user.passwords.is_empty() || user.passwords.contains(&password) {
+                Ok(Some(Message::new_simple_string("OK".to_string())))
+            } else {
+                Err(anyhow!(
+                    "WRONGPASS invalid username-password pair or user is disabled."
+                ))
+            }
+        }
+        None => Err(anyhow!(
+            "WRONGPASS invalid username-password pair or user is disabled."
+        )),
+    }
+}
+
+fn hash_password(password: &str) -> String {
+    let mut hasher = Sha256::new();
+
+    hasher.update(password);
+
+    let result = hasher.finalize();
+
+    hex::encode(result)
 }
