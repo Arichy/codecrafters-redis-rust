@@ -356,33 +356,53 @@ impl WatchingManager {
     /// Unregister a specific key watch for a client
     pub fn unregister(&self, key: &str, client_id: &str) {
         // Remove from watchers
-        if let Some(mut entry) = self.watchers.get_mut(key) {
-            entry.remove(client_id);
-            if entry.is_empty() {
-                self.watchers.remove(key);
+        // NOTE: DashMap's get_mut returns a guard that holds the shard lock.
+        // Calling remove() while the guard is still active would deadlock.
+        // Solution: check the condition while holding the guard, store the result,
+        // then drop the guard before calling remove().
+        let should_remove_key = {
+            if let Some(mut entry) = self.watchers.get_mut(key) {
+                entry.remove(client_id);
+                entry.is_empty()
+            } else {
+                false
             }
+        };
+        if should_remove_key {
+            self.watchers.remove(key);
         }
 
-        // Remove from client_keys
-        if let Some(mut entry) = self.client_keys.get_mut(client_id) {
-            entry.remove(key);
-            if entry.is_empty() {
-                self.client_keys.remove(client_id);
+        // Remove from client_keys (same pattern to avoid deadlock)
+        let should_remove_client = {
+            if let Some(mut entry) = self.client_keys.get_mut(client_id) {
+                entry.remove(key);
+                entry.is_empty()
+            } else {
+                false
             }
+        };
+        if should_remove_client {
+            self.client_keys.remove(client_id);
         }
     }
 
-    /// Unwatch all keys for a client (UNWATCH command)
+    /// Unwatch all keys for a client (UNWATCH command, or DISCARD/EXEC)
     pub fn unwatch_all(&self, client_id: &str) {
-        // Get all keys this client is watching
+        // Remove from client_keys first (returns all keys this client is watching)
         if let Some((_, keys)) = self.client_keys.remove(client_id) {
-            // Remove each key from the watchers map
+            // Remove each key's entry for this client from watchers
+            // Same deadlock avoidance pattern as unregister()
             for key in keys {
-                if let Some(mut entry) = self.watchers.get_mut(&key) {
-                    entry.remove(client_id);
-                    if entry.is_empty() {
-                        self.watchers.remove(&key);
+                let should_remove_key = {
+                    if let Some(mut entry) = self.watchers.get_mut(&key) {
+                        entry.remove(client_id);
+                        entry.is_empty()
+                    } else {
+                        false
                     }
+                };
+                if should_remove_key {
+                    self.watchers.remove(&key);
                 }
             }
         }

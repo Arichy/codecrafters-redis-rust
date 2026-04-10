@@ -38,6 +38,7 @@ pub async fn exec(ctx: &mut CommandContext) -> Result<Option<Message>> {
     if ctx.is_dirty.load(Ordering::Acquire) {
         ctx.in_transaction = false;
         ctx.server.watchers.unwatch_all(&ctx.client_id);
+
         return Ok(Some(Message::NullArray));
     }
 
