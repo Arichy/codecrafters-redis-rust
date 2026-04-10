@@ -17,8 +17,16 @@ async fn whoami(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>
 }
 
 pub async fn getuser(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
+    let user = &args[1];
+
+    let flags = if user.as_str() == "default" {
+        vec![Message::new_bulk_string("nopass".to_string())]
+    } else {
+        vec![]
+    };
+
     Ok(Some(Message::new_array(vec![
         Message::new_bulk_string("flags".to_string()),
-        Message::new_array(vec![]),
+        Message::new_array(flags),
     ])))
 }
