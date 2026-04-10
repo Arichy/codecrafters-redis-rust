@@ -28,5 +28,7 @@ pub async fn getuser(ctx: &CommandContext, args: &[String]) -> Result<Option<Mes
     Ok(Some(Message::new_array(vec![
         Message::new_bulk_string("flags".to_string()),
         Message::new_array(flags),
+        Message::new_bulk_string("passwords".to_string()),
+        Message::new_array(vec![]),
     ])))
 }
