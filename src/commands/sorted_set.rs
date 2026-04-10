@@ -15,11 +15,7 @@ pub async fn zadd(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
     let score: f64 = args[1].parse()?;
     let member = &args[2];
 
-    let mut rdb = ctx.server.rdb.write().await;
-    let db_index = *ctx.selected_db.read().await;
-    let db = rdb.get_db_mut(db_index)?;
-
-    let count = zset_add(db, key, member, score)?;
+    let count = ctx.with_db_mut(|db| zset_add(db, key, member, score)).await?;
 
     Ok(Some(Message::Integer(Integer { value: count })))
 }
@@ -34,11 +30,9 @@ pub async fn zrank(ctx: &CommandContext, args: &[String]) -> Result<Option<Messa
     let key = &args[0];
     let member = &args[1];
 
-    let mut rdb = ctx.server.rdb.write().await;
-    let db_index = *ctx.selected_db.read().await;
-    let db = rdb.get_db_mut(db_index)?;
+    let rank = ctx.with_db_mut(|db| zset_rank(db, key, member)).await?;
 
-    match zset_rank(db, key, member)? {
+    match rank {
         Some(rank) => Ok(Some(Message::Integer(Integer { value: rank as i64 }))),
         None => Ok(Some(Message::NullBulkString)),
     }
@@ -55,11 +49,7 @@ pub async fn zrange(ctx: &CommandContext, args: &[String]) -> Result<Option<Mess
     let start: i32 = args[1].parse()?;
     let end: i32 = args[2].parse()?;
 
-    let mut rdb = ctx.server.rdb.write().await;
-    let db_index = *ctx.selected_db.read().await;
-    let db = rdb.get_db_mut(db_index)?;
-
-    let result = zset_range(db, key, start, end)?;
+    let result = ctx.with_db_mut(|db| zset_range(db, key, start, end)).await?;
 
     Ok(Some(Message::new_array(
         result.iter().map(|item| Message::new_bulk_string(item.clone())).collect()
@@ -75,11 +65,7 @@ pub async fn zcard(ctx: &CommandContext, args: &[String]) -> Result<Option<Messa
 
     let key = &args[0];
 
-    let mut rdb = ctx.server.rdb.write().await;
-    let db_index = *ctx.selected_db.read().await;
-    let db = rdb.get_db_mut(db_index)?;
-
-    let count = zset_card(db, key)?;
+    let count = ctx.with_db_mut(|db| zset_card(db, key)).await?;
 
     Ok(Some(Message::Integer(Integer { value: count as i64 })))
 }
@@ -94,11 +80,9 @@ pub async fn zscore(ctx: &CommandContext, args: &[String]) -> Result<Option<Mess
     let key = &args[0];
     let member = &args[1];
 
-    let mut rdb = ctx.server.rdb.write().await;
-    let db_index = *ctx.selected_db.read().await;
-    let db = rdb.get_db_mut(db_index)?;
+    let score = ctx.with_db_mut(|db| zset_score(db, key, member)).await?;
 
-    match zset_score(db, key, member)? {
+    match score {
         Some(score) => Ok(Some(Message::new_bulk_string(score.to_string()))),
         None => Ok(Some(Message::NullBulkString)),
     }
@@ -114,11 +98,7 @@ pub async fn zrem(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
     let key = &args[0];
     let member = &args[1];
 
-    let mut rdb = ctx.server.rdb.write().await;
-    let db_index = *ctx.selected_db.read().await;
-    let db = rdb.get_db_mut(db_index)?;
-
-    let count = zset_rem(db, key, member)?;
+    let count = ctx.with_db_mut(|db| zset_rem(db, key, member)).await?;
 
     Ok(Some(Message::Integer(Integer { value: count })))
 }

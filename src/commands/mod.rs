@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::message::Message;
+use crate::rdb::Database;
 use crate::server::Server;
 
 pub mod geo;
@@ -114,5 +115,29 @@ pub async fn execute(
         "geodist" => geo::distance(ctx, args).await,
         "geosearch" => geo::search(ctx, args).await,
         _ => Ok(None),
+    }
+}
+
+impl CommandContext {
+    /// Execute a closure with mutable access to the current database.
+    pub async fn with_db_mut<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut Database) -> Result<T>,
+    {
+        let mut rdb = self.server.rdb.write().await;
+        let db_index = *self.selected_db.read().await;
+        let db = rdb.get_db_mut(db_index)?;
+        f(db)
+    }
+
+    /// Execute a closure with read access to the current database.
+    pub async fn with_db<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&Database) -> Result<T>,
+    {
+        let rdb = self.server.rdb.read().await;
+        let db_index = *self.selected_db.read().await;
+        let db = rdb.get_db(db_index)?;
+        f(db)
     }
 }

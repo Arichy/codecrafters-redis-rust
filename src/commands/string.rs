@@ -13,26 +13,24 @@ pub async fn get(ctx: &CommandContext, args: &[String]) -> Result<Option<Message
 
     let key = &args[0];
 
-    let rdb = ctx.server.rdb.read().await;
-    let db_index = *ctx.selected_db.read().await;
-    let db = rdb.get_db(db_index)?;
-
-    if let Some(value) = db.map.get(key) {
-        if value.is_expired() {
-            return Ok(Some(Message::NullBulkString));
-        }
-
-        match &value.value {
-            ValueType::StringValue(StringValue { string }) => {
-                Ok(Some(Message::new_bulk_string(string.clone())))
+    ctx.with_db(|db| {
+        if let Some(value) = db.map.get(key) {
+            if value.is_expired() {
+                return Ok(Some(Message::NullBulkString));
             }
-            _ => Ok(Some(Message::SimpleError(SimpleError {
-                string: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
-            }))),
+
+            match &value.value {
+                ValueType::StringValue(StringValue { string }) => {
+                    Ok(Some(Message::new_bulk_string(string.clone())))
+                }
+                _ => Ok(Some(Message::SimpleError(SimpleError {
+                    string: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                }))),
+            }
+        } else {
+            Ok(Some(Message::NullBulkString))
         }
-    } else {
-        Ok(Some(Message::NullBulkString))
-    }
+    }).await
 }
 
 pub async fn set(ctx: &CommandContext, args: &[String], message: &Message) -> Result<Option<Message>> {
@@ -109,47 +107,45 @@ pub async fn incr(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
 
     let key = &args[0];
 
-    let mut rdb = ctx.server.rdb.write().await;
-    let db_index = *ctx.selected_db.read().await;
-    let db = rdb.get_db_mut(db_index)?;
-
-    let next_int = if let Some(value) = db.map.get_mut(key) {
-        if let ValueType::StringValue(StringValue { string }) = &value.value {
-            match string.parse::<i64>() {
-                Ok(n) => {
-                    if let Some(next) = n.checked_add(1) {
-                        value.value = ValueType::StringValue(StringValue {
-                            string: next.to_string(),
-                        });
-                        Some(next)
-                    } else {
-                        None
+    ctx.with_db_mut(|db| {
+        let next_int = if let Some(value) = db.map.get_mut(key) {
+            if let ValueType::StringValue(StringValue { string }) = &value.value {
+                match string.parse::<i64>() {
+                    Ok(n) => {
+                        if let Some(next) = n.checked_add(1) {
+                            value.value = ValueType::StringValue(StringValue {
+                                string: next.to_string(),
+                            });
+                            Some(next)
+                        } else {
+                            None
+                        }
                     }
+                    Err(_) => None,
                 }
-                Err(_) => None,
+            } else {
+                None
             }
         } else {
-            None
-        }
-    } else {
-        // Key doesn't exist, initialize to 1
-        db.map.insert(
-            key.clone(),
-            Value {
-                expiry: None,
-                value: ValueType::StringValue(StringValue {
-                    string: "1".to_string(),
-                }),
-            },
-        );
-        Some(1)
-    };
+            // Key doesn't exist, initialize to 1
+            db.map.insert(
+                key.clone(),
+                Value {
+                    expiry: None,
+                    value: ValueType::StringValue(StringValue {
+                        string: "1".to_string(),
+                    }),
+                },
+            );
+            Some(1)
+        };
 
-    if let Some(n) = next_int {
-        Ok(Some(Message::Integer(Integer { value: n })))
-    } else {
-        Ok(Some(Message::SimpleError(SimpleError {
-            string: "ERR value is not an integer or out of range".to_string(),
-        })))
-    }
+        if let Some(n) = next_int {
+            Ok(Some(Message::Integer(Integer { value: n })))
+        } else {
+            Ok(Some(Message::SimpleError(SimpleError {
+                string: "ERR value is not an integer or out of range".to_string(),
+            })))
+        }
+    }).await
 }

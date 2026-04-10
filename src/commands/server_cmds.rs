@@ -108,17 +108,14 @@ pub async fn keys(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
         })));
     }
 
-    let rdb = ctx.server.rdb.read().await;
-    let db_index = *ctx.selected_db.read().await;
-    let db = rdb.get_db(db_index)?;
-
-    let items: Vec<Message> = db
-        .map
-        .keys()
-        .map(|k| Message::new_bulk_string(k.clone()))
-        .collect();
-
-    Ok(Some(Message::new_array(items)))
+    ctx.with_db(|db| {
+        let items: Vec<Message> = db
+            .map
+            .keys()
+            .map(|k| Message::new_bulk_string(k.clone()))
+            .collect();
+        Ok(Some(Message::new_array(items)))
+    }).await
 }
 
 pub async fn type_cmd(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -130,24 +127,21 @@ pub async fn type_cmd(ctx: &CommandContext, args: &[String]) -> Result<Option<Me
 
     let key = &args[0];
 
-    let rdb = ctx.server.rdb.read().await;
-    let db_index = *ctx.selected_db.read().await;
-    let db = rdb.get_db(db_index)?;
-
-    let type_str = if let Some(value) = db.map.get(key) {
-        match value.value {
-            ValueType::StringValue(_) => "string",
-            ValueType::ListValue(_) => "list",
-            ValueType::StreamValue(_) => "stream",
-            ValueType::SortedSet(_) => "zset",
-        }
-    } else {
-        "none"
-    };
-
-    Ok(Some(Message::SimpleString(SimpleString {
-        string: type_str.to_string(),
-    })))
+    ctx.with_db(|db| {
+        let type_str = if let Some(value) = db.map.get(key) {
+            match value.value {
+                ValueType::StringValue(_) => "string",
+                ValueType::ListValue(_) => "list",
+                ValueType::StreamValue(_) => "stream",
+                ValueType::SortedSet(_) => "zset",
+            }
+        } else {
+            "none"
+        };
+        Ok(Some(Message::SimpleString(SimpleString {
+            string: type_str.to_string(),
+        })))
+    }).await
 }
 
 pub async fn replconf(

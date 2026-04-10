@@ -41,11 +41,7 @@ pub async fn add(ctx: &CommandContext, args: &[String]) -> Result<Option<Message
 
     let score = encode(la, lo);
 
-    let mut rdb = ctx.server.rdb.write().await;
-    let db_index = *ctx.selected_db.read().await;
-    let db = rdb.get_db_mut(db_index)?;
-
-    let count = zset_add(db, key, member, score as f64)?;
+    let count = ctx.with_db_mut(|db| zset_add(db, key, member, score as f64)).await?;
 
     Ok(Some(Message::Integer(Integer { value: count })))
 }
@@ -54,27 +50,24 @@ pub async fn pos(ctx: &CommandContext, args: &[String]) -> Result<Option<Message
     let key = &args[0];
     let members = &args[1..];
 
-    let mut rdb = ctx.server.rdb.write().await;
-    let db_index = *ctx.selected_db.read().await;
-    let db = rdb.get_db_mut(db_index)?;
-
-    let mut items = Vec::with_capacity(members.len());
-
-    for member in members {
-        match zset_score(db, key, member)? {
-            Some(score) => {
-                let score_int = score as u64;
-                let coordinates = decode(score_int);
-                items.push(Message::new_array(vec![
-                    Message::new_bulk_string(coordinates.longitude.to_string()),
-                    Message::new_bulk_string(coordinates.latitude.to_string()),
-                ]));
-            }
-            None => {
-                items.push(Message::NullArray);
+    let items = ctx.with_db_mut(|db| {
+        let mut items = Vec::with_capacity(members.len());
+        for member in members {
+            match zset_score(db, key, member)? {
+                Some(score) => {
+                    let coordinates = decode(score as u64);
+                    items.push(Message::new_array(vec![
+                        Message::new_bulk_string(coordinates.longitude.to_string()),
+                        Message::new_bulk_string(coordinates.latitude.to_string()),
+                    ]));
+                }
+                None => {
+                    items.push(Message::NullArray);
+                }
             }
         }
-    }
+        Ok(items)
+    }).await?;
 
     Ok(Some(Message::new_array(items)))
 }
@@ -84,36 +77,34 @@ pub async fn distance(ctx: &CommandContext, args: &[String]) -> Result<Option<Me
     let member1 = &args[1];
     let member2 = &args[2];
 
-    let mut rdb = ctx.server.rdb.write().await;
-    let db_index = *ctx.selected_db.read().await;
-    let db = rdb.get_db_mut(db_index)?;
+    let result = ctx.with_db_mut(|db| {
+        let score1 = zset_score(db, key, member1)?;
+        let score2 = zset_score(db, key, member2)?;
 
-    let score1 = zset_score(db, key, member1)?;
-    let score2 = zset_score(db, key, member2)?;
+        match (score1, score2) {
+            (Some(s1), Some(s2)) => {
+                let co1 = decode(s1 as u64);
+                let co2 = decode(s2 as u64);
+                let dist = distance::haversine(
+                    Coordinates {
+                        latitude: co1.latitude,
+                        longitude: co1.longitude,
+                    },
+                    Coordinates {
+                        latitude: co2.latitude,
+                        longitude: co2.longitude,
+                    },
+                );
+                Ok(Some(dist))
+            }
+            _ => Ok(None),
+        }
+    }).await?;
 
-    // Check if either member doesn't exist
-    let Some(score1) = score1 else {
-        return Ok(Some(Message::NullBulkString));
-    };
-    let Some(score2) = score2 else {
-        return Ok(Some(Message::NullBulkString));
-    };
-
-    let co1 = decode(score1 as u64);
-    let co2 = decode(score2 as u64);
-
-    let dist = distance::haversine(
-        Coordinates {
-            latitude: co1.latitude,
-            longitude: co1.longitude,
-        },
-        Coordinates {
-            latitude: co2.latitude,
-            longitude: co2.longitude,
-        },
-    );
-
-    Ok(Some(Message::new_bulk_string(dist.to_string())))
+    match result {
+        Some(dist) => Ok(Some(Message::new_bulk_string(dist.to_string()))),
+        None => Ok(Some(Message::NullBulkString)),
+    }
 }
 
 pub async fn search(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -139,33 +130,29 @@ pub async fn search(ctx: &CommandContext, args: &[String]) -> Result<Option<Mess
         _ => todo!(),
     };
 
-    let mut rdb = ctx.server.rdb.write().await;
-    let db_index = *ctx.selected_db.read().await;
-    let db = rdb.get_db_mut(db_index)?;
-
-    let members = zset_range(db, key, 0, -1)?;
-
-    let mut ret = vec![];
-    for member in &members {
-        if let Some(score) = zset_score(db, key, member)? {
-            let coordinates = decode(score as u64);
-
-            let dist = distance::haversine(
-                Coordinates {
-                    latitude: la,
-                    longitude: lo,
-                },
-                Coordinates {
-                    latitude: coordinates.latitude,
-                    longitude: coordinates.longitude,
-                },
-            );
-
-            if dist <= radius {
-                ret.push(Message::new_bulk_string(member.clone()));
+    let ret = ctx.with_db_mut(|db| {
+        let members = zset_range(db, key, 0, -1)?;
+        let mut ret = vec![];
+        for member in &members {
+            if let Some(score) = zset_score(db, key, member)? {
+                let coordinates = decode(score as u64);
+                let dist = distance::haversine(
+                    Coordinates {
+                        latitude: la,
+                        longitude: lo,
+                    },
+                    Coordinates {
+                        latitude: coordinates.latitude,
+                        longitude: coordinates.longitude,
+                    },
+                );
+                if dist <= radius {
+                    ret.push(Message::new_bulk_string(member.clone()));
+                }
             }
         }
-    }
+        Ok(ret)
+    }).await?;
 
     Ok(Some(Message::new_array(ret)))
 }
