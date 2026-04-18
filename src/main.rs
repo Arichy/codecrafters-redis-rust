@@ -85,9 +85,9 @@ fn parse_replicaof(s: &str) -> Result<SocketAddr> {
 }
 
 fn parse_appendonly(s: &str) -> Result<bool> {
-    if s.eq_ignore_ascii_case("yes") {
+    if s.eq_ignore_ascii_case("yes") || s.eq_ignore_ascii_case("true") {
         Ok(true)
-    } else if s.eq_ignore_ascii_case("no") {
+    } else if s.eq_ignore_ascii_case("no") || s.eq_ignore_ascii_case("false") {
         Ok(false)
     } else {
         Err(anyhow::anyhow!("Invalid value: {s}"))
