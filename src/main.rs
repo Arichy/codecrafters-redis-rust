@@ -12,6 +12,7 @@ use bytes::Bytes;
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use tokio::fs::{read, OpenOptions};
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::codec::Framed;
@@ -142,8 +143,18 @@ async fn main() -> Result<()> {
             OpenOptions::new()
                 .write(true)
                 .create_new(true)
-                .open(aof_dir.join(PathBuf::from(aof_filename)))
+                .open(aof_dir.join(PathBuf::from(&aof_filename)))
                 .await?;
+
+            let manifest_filename = format!("{}.manifest", &args_read.aof.appendfilename);
+            let mut manifest_file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(aof_dir.join(PathBuf::from(manifest_filename)))
+                .await?;
+            manifest_file
+                .write_all(format!("file {} seq 1 type i", aof_filename).as_bytes())
+                .await;
         }
     }
 
