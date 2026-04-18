@@ -131,6 +131,15 @@ async fn main() -> Result<()> {
         }
     }
 
+    // AOF
+    {
+        let args_read = args.read().await;
+        if args_read.aof.appendonly {
+            let aof_dir = args_read.aof.dir.join(&args_read.aof.appenddirname);
+            tokio::fs::create_dir_all(&aof_dir).await?;
+        }
+    }
+
     // Create replication state
     let repl_state = {
         let args_read = args.read().await;
