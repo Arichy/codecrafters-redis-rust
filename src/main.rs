@@ -50,7 +50,7 @@ struct CliArgs {
     #[arg(long, value_parser = parse_replicaof)]
     replicaof: Option<SocketAddr>,
 
-    #[arg(long, value_parser = parse_appendonly, default_value = "no")]
+    #[arg(long, value_parser = parse_appendonly, num_args = 1, default_value = "no")]
     appendonly: bool,
 
     #[arg(long, default_value = "appendonlydir")]
@@ -85,9 +85,9 @@ fn parse_replicaof(s: &str) -> Result<SocketAddr> {
 }
 
 fn parse_appendonly(s: &str) -> Result<bool> {
-    if s.eq_ignore_ascii_case("yes") || s.eq_ignore_ascii_case("true") {
+    if s.eq_ignore_ascii_case("yes") {
         Ok(true)
-    } else if s.eq_ignore_ascii_case("no") || s.eq_ignore_ascii_case("false") {
+    } else if s.eq_ignore_ascii_case("no") {
         Ok(false)
     } else {
         Err(anyhow::anyhow!("Invalid value: {s}"))
