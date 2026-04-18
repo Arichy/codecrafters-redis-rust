@@ -50,16 +50,16 @@ struct CliArgs {
     #[arg(long, value_parser = parse_replicaof)]
     replicaof: Option<SocketAddr>,
 
-    #[arg(value_parser = parse_appendonly, default_value = "no")]
+    #[arg(long, value_parser = parse_appendonly, default_value = "no")]
     appendonly: bool,
 
-    #[arg(default_value = "appendonlydir")]
+    #[arg(long, default_value = "appendonlydir")]
     appenddirname: String,
 
-    #[arg(default_value = "appendonly.aof")]
+    #[arg(long, default_value = "appendonly.aof")]
     appendfilename: String,
 
-    #[arg(default_value = "everysec")]
+    #[arg(long, default_value = "everysec")]
     appendfsync: String,
 }
 
