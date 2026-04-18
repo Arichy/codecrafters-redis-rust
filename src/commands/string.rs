@@ -24,16 +24,22 @@ pub async fn get(ctx: &CommandContext, args: &[String]) -> Result<Option<Message
                     Ok(Some(Message::new_bulk_string(string.clone())))
                 }
                 _ => Ok(Some(Message::SimpleError(SimpleError {
-                    string: "WRONGTYPE Operation against a key holding the wrong kind of value".to_string(),
+                    string: "WRONGTYPE Operation against a key holding the wrong kind of value"
+                        .to_string(),
                 }))),
             }
         } else {
             Ok(Some(Message::NullBulkString))
         }
-    }).await
+    })
+    .await
 }
 
-pub async fn set(ctx: &CommandContext, args: &[String], message: &Message) -> Result<Option<Message>> {
+pub async fn set(
+    ctx: &CommandContext,
+    args: &[String],
+    message: &Message,
+) -> Result<Option<Message>> {
     if args.len() < 2 {
         return Ok(Some(Message::SimpleError(SimpleError {
             string: "ERR wrong number of arguments for 'set' command".to_string(),
@@ -92,6 +98,14 @@ pub async fn set(ctx: &CommandContext, args: &[String], message: &Message) -> Re
         ctx.server.replicas.broadcast(message).await;
     }
 
+    // TODO: add this for all write commands
+    if ctx.server.aof.appendonly {
+        ctx.server
+            .aof
+            .write_to_current_aof_file(message.clone())
+            .await?;
+    }
+
     if ctx.is_slave {
         Ok(None)
     } else {
@@ -108,47 +122,49 @@ pub async fn incr(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
 
     let key = &args[0];
 
-    let result = ctx.with_db_mut(|db| {
-        let next_int = if let Some(value) = db.map.get_mut(key) {
-            if let ValueType::StringValue(StringValue { string }) = &value.value {
-                match string.parse::<i64>() {
-                    Ok(n) => {
-                        if let Some(next) = n.checked_add(1) {
-                            value.value = ValueType::StringValue(StringValue {
-                                string: next.to_string(),
-                            });
-                            Some(next)
-                        } else {
-                            None
+    let result = ctx
+        .with_db_mut(|db| {
+            let next_int = if let Some(value) = db.map.get_mut(key) {
+                if let ValueType::StringValue(StringValue { string }) = &value.value {
+                    match string.parse::<i64>() {
+                        Ok(n) => {
+                            if let Some(next) = n.checked_add(1) {
+                                value.value = ValueType::StringValue(StringValue {
+                                    string: next.to_string(),
+                                });
+                                Some(next)
+                            } else {
+                                None
+                            }
                         }
+                        Err(_) => None,
                     }
-                    Err(_) => None,
+                } else {
+                    None
                 }
             } else {
-                None
-            }
-        } else {
-            // Key doesn't exist, initialize to 1
-            db.map.insert(
-                key.clone(),
-                Value {
-                    expiry: None,
-                    value: ValueType::StringValue(StringValue {
-                        string: "1".to_string(),
-                    }),
-                },
-            );
-            Some(1)
-        };
+                // Key doesn't exist, initialize to 1
+                db.map.insert(
+                    key.clone(),
+                    Value {
+                        expiry: None,
+                        value: ValueType::StringValue(StringValue {
+                            string: "1".to_string(),
+                        }),
+                    },
+                );
+                Some(1)
+            };
 
-        if let Some(n) = next_int {
-            Ok(Some(Message::new_integer(n)))
-        } else {
-            Ok(Some(Message::SimpleError(SimpleError {
-                string: "ERR value is not an integer or out of range".to_string(),
-            })))
-        }
-    }).await?;
+            if let Some(n) = next_int {
+                Ok(Some(Message::new_integer(n)))
+            } else {
+                Ok(Some(Message::SimpleError(SimpleError {
+                    string: "ERR value is not an integer or out of range".to_string(),
+                })))
+            }
+        })
+        .await?;
 
     // Notify watchers if the key was modified
     if result.is_some() && !matches!(result, Some(Message::SimpleError(_))) {

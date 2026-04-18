@@ -103,18 +103,20 @@ async fn main() -> Result<()> {
         .dir
         .unwrap_or_else(|| std::env::current_dir().unwrap());
 
+    let aof = Arc::new(AOF {
+        dir: dir.clone(),
+        appendonly: cli_args.appendonly,
+        appenddirname: cli_args.appenddirname,
+        appendfilename: cli_args.appendfilename,
+        appendfsync: cli_args.appendfsync,
+    });
+
     let args = Arc::new(RwLock::new(Args {
         port: cli_args.port,
         dir: dir.clone(),
         dbfilename: cli_args.dbfilename,
         replicaof: cli_args.replicaof,
-        aof: Arc::new(AOF {
-            dir: dir.clone(),
-            appendonly: cli_args.appendonly,
-            appenddirname: cli_args.appenddirname,
-            appendfilename: cli_args.appendfilename,
-            appendfsync: cli_args.appendfsync,
-        }),
+        aof: aof.clone(),
     }));
 
     // Load RDB if specified
@@ -142,15 +144,15 @@ async fn main() -> Result<()> {
             let aof_filename = format!("{}.1.incr.aof", &args_read.aof.appendfilename);
             OpenOptions::new()
                 .write(true)
-                .create_new(true)
+                .create(true)
                 .open(aof_dir.join(PathBuf::from(&aof_filename)))
                 .await?;
 
-            let manifest_filename = format!("{}.manifest", &args_read.aof.appendfilename);
+            let manifest_path = args_read.aof.manifest_path();
             let mut manifest_file = OpenOptions::new()
                 .write(true)
-                .create_new(true)
-                .open(aof_dir.join(PathBuf::from(manifest_filename)))
+                .create(true)
+                .open(aof_dir.join(PathBuf::from(manifest_path)))
                 .await?;
             manifest_file
                 .write_all(format!("file {} seq 1 type i", aof_filename).as_bytes())
@@ -176,7 +178,7 @@ async fn main() -> Result<()> {
     };
 
     // Create server
-    let server = Server::new(rdb, repl_state);
+    let server = Server::new(rdb, aof, repl_state);
 
     // If slave, connect to master
     if let Some(master_addr) = master_addr {
