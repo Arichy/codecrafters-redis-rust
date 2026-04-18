@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
-use tokio::fs::read;
+use tokio::fs::{read, OpenOptions};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::codec::Framed;
@@ -137,6 +137,13 @@ async fn main() -> Result<()> {
         if args_read.aof.appendonly {
             let aof_dir = args_read.aof.dir.join(&args_read.aof.appenddirname);
             tokio::fs::create_dir_all(&aof_dir).await?;
+
+            let aof_filename = format!("{}.1.incr.aof", &args_read.aof.appendfilename);
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(aof_dir.join(PathBuf::from(aof_filename)))
+                .await?;
         }
     }
 
