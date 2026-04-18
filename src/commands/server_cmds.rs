@@ -71,21 +71,56 @@ pub async fn config(ctx: &CommandContext, args: &[String]) -> Result<Option<Mess
             let param = args[1].to_lowercase();
             let items: Vec<Message> = match param.as_str() {
                 "dir" => {
-                    let dir_str = ctx.config.dir.as_ref()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_default();
+                    let dir_str = ctx.config.dir.to_string_lossy().to_string();
+
                     vec![
                         Message::new_bulk_string("dir".to_string()),
                         Message::new_bulk_string(dir_str),
                     ]
                 }
                 "dbfilename" => {
-                    let filename_str = ctx.config.dbfilename.as_ref()
+                    let filename_str = ctx
+                        .config
+                        .dbfilename
+                        .as_ref()
                         .map(|p| p.to_string_lossy().to_string())
                         .unwrap_or_default();
                     vec![
                         Message::new_bulk_string("dbfilename".to_string()),
                         Message::new_bulk_string(filename_str),
+                    ]
+                }
+                "appendonly" => {
+                    let appendonly = ctx.config.aof.appendonly;
+                    let appendonly = if appendonly { "yes" } else { "no" };
+
+                    vec![
+                        Message::new_bulk_string("appendonly".to_string()),
+                        Message::new_bulk_string(appendonly.to_string()),
+                    ]
+                }
+                "appenddirname" => {
+                    let appenddirname = ctx.config.aof.appenddirname.clone();
+
+                    vec![
+                        Message::new_bulk_string("appenddirname".to_string()),
+                        Message::new_bulk_string(appenddirname.to_string()),
+                    ]
+                }
+                "appendfilename" => {
+                    let appendfilename = ctx.config.aof.appendfilename.clone();
+
+                    vec![
+                        Message::new_bulk_string("appendfilename".to_string()),
+                        Message::new_bulk_string(appendfilename.to_string()),
+                    ]
+                }
+                "appendfsync" => {
+                    let appendfsync = ctx.config.aof.appendfsync.clone();
+
+                    vec![
+                        Message::new_bulk_string("appendfsync".to_string()),
+                        Message::new_bulk_string(appendfsync.to_string()),
                     ]
                 }
                 _ => vec![],
@@ -113,7 +148,8 @@ pub async fn keys(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
             .map(|k| Message::new_bulk_string(k.clone()))
             .collect();
         Ok(Some(Message::new_array(items)))
-    }).await
+    })
+    .await
 }
 
 pub async fn type_cmd(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
@@ -137,7 +173,8 @@ pub async fn type_cmd(ctx: &CommandContext, args: &[String]) -> Result<Option<Me
             "none"
         };
         Ok(Some(Message::new_simple_string(type_str)))
-    }).await
+    })
+    .await
 }
 
 pub async fn replconf(

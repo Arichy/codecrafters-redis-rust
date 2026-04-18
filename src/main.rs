@@ -16,6 +16,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::codec::Framed;
 
+use codecrafters_redis::aof::AOF;
 use codecrafters_redis::commands::{self, CommandContext, ServerConfig};
 use codecrafters_redis::message::{Integer, Message, MessageFramer, SimpleError, SimpleString};
 use codecrafters_redis::rdb::RDB;
@@ -29,9 +30,10 @@ type MessageWriter =
 #[derive(Debug, Clone)]
 struct Args {
     port: u16,
-    dir: Option<PathBuf>,
+    dir: PathBuf,
     dbfilename: Option<PathBuf>,
     replicaof: Option<SocketAddr>,
+    aof: Arc<AOF>,
 }
 
 #[derive(Debug, Parser)]
@@ -47,6 +49,18 @@ struct CliArgs {
 
     #[arg(long, value_parser = parse_replicaof)]
     replicaof: Option<SocketAddr>,
+
+    #[arg(value_parser = parse_appendonly, default_value = "no")]
+    appendonly: bool,
+
+    #[arg(default_value = "appendonlydir")]
+    appenddirname: String,
+
+    #[arg(default_value = "appendonly.aof")]
+    appendfilename: String,
+
+    #[arg(default_value = "everysec")]
+    appendfsync: String,
 }
 
 fn parse_replicaof(s: &str) -> Result<SocketAddr> {
@@ -70,15 +84,36 @@ fn parse_replicaof(s: &str) -> Result<SocketAddr> {
         .context("No addresses found for hostname")
 }
 
+fn parse_appendonly(s: &str) -> Result<bool> {
+    if s.eq_ignore_ascii_case("yes") {
+        Ok(true)
+    } else if s.eq_ignore_ascii_case("no") {
+        Ok(false)
+    } else {
+        Err(anyhow::anyhow!("Invalid value: {s}"))
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli_args = CliArgs::parse();
 
+    let dir = cli_args
+        .dir
+        .unwrap_or_else(|| std::env::current_dir().unwrap());
+
     let args = Arc::new(RwLock::new(Args {
         port: cli_args.port,
-        dir: cli_args.dir,
+        dir: dir.clone(),
         dbfilename: cli_args.dbfilename,
         replicaof: cli_args.replicaof,
+        aof: Arc::new(AOF {
+            dir: dir.clone(),
+            appendonly: cli_args.appendonly,
+            appenddirname: cli_args.appenddirname,
+            appendfilename: cli_args.appendfilename,
+            appendfsync: cli_args.appendfsync,
+        }),
     }));
 
     // Load RDB if specified
@@ -86,11 +121,8 @@ async fn main() -> Result<()> {
     {
         let args_read = args.read().await;
         if let Some(dbfilename) = &args_read.dbfilename {
-            let fullpath = if let Some(dir) = &args_read.dir {
-                dir.join(dbfilename)
-            } else {
-                dbfilename.clone()
-            };
+            let fullpath = dir.join(dbfilename);
+
             if let Ok(rdb_content) = read(&fullpath).await {
                 if let Ok(loaded_rdb) = RDB::from_bytes(&mut Bytes::from(rdb_content)) {
                     rdb = loaded_rdb;
@@ -278,6 +310,7 @@ async fn handle_client_with_framed(
         Arc::new(ServerConfig {
             dir: args_read.dir.clone(),
             dbfilename: args_read.dbfilename.clone(),
+            aof: args_read.aof.clone(),
         })
     };
 

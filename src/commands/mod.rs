@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex, RwLock};
 
+use crate::aof::AOF;
 use crate::commands::auth::User;
 use crate::message::Message;
 use crate::rdb::Database;
@@ -24,8 +25,9 @@ pub mod transaction;
 /// Server configuration (read-only, shared via Arc)
 #[derive(Debug)]
 pub struct ServerConfig {
-    pub dir: Option<PathBuf>,
+    pub dir: PathBuf,
     pub dbfilename: Option<PathBuf>,
+    pub aof: Arc<AOF>,
 }
 
 /// Context for command execution

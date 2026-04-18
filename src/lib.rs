@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
 #![allow(unused)]
 
+pub mod aof;
 pub mod commands;
 pub mod core;
 pub mod message;
