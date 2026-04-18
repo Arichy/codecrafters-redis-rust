@@ -1,4 +1,4 @@
-use anyhow::Context;
+use eyre::{Context, ContextCompat};
 use bytes::{Buf, Bytes, BytesMut};
 use std::sync::Arc;
 use thiserror::Error;
@@ -25,7 +25,7 @@ pub enum Message {
 }
 
 impl Message {
-    pub fn length(&self) -> anyhow::Result<usize> {
+    pub fn length(&self) -> eyre::Result<usize> {
         let mut message_framer = MessageFramer;
         let mut bytes = BytesMut::new();
         message_framer

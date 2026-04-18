@@ -1,4 +1,4 @@
-use anyhow::Result;
+use eyre::Result;
 
 use crate::commands::CommandContext;
 use crate::core::zset::{zset_add, zset_card, zset_range, zset_rank, zset_rem, zset_score};

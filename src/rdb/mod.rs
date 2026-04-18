@@ -8,7 +8,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context, Ok};
+use eyre::{Context, ContextCompat};
 use bytes::{Buf, Bytes};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -58,7 +58,7 @@ pub fn parse_encoded_size(bytes: &mut Bytes) -> usize {
     }
 }
 
-pub fn parse_encoded_string(bytes: &mut Bytes) -> anyhow::Result<String> {
+pub fn parse_encoded_string(bytes: &mut Bytes) -> eyre::Result<String> {
     let first_byte = bytes[0];
     let (first_two, _) = split_at_two(bytes[0]);
     let string = match first_two {
@@ -116,7 +116,7 @@ impl RDB {
         }
     }
 
-    pub fn from_bytes(bytes: &mut Bytes) -> anyhow::Result<Self> {
+    pub fn from_bytes(bytes: &mut Bytes) -> eyre::Result<Self> {
         // parse header section
         let magic_string = String::from_utf8(bytes.slice(..5).to_vec()).context("Magic string")?;
         bytes.advance(5);
@@ -231,14 +231,14 @@ f0 6e 3b fe c0 ff 5a a2";
         Bytes::from(file_bytes)
     }
 
-    pub fn get_db_mut(&mut self, index: usize) -> anyhow::Result<&mut Database> {
+    pub fn get_db_mut(&mut self, index: usize) -> eyre::Result<&mut Database> {
         self.databases
             .iter_mut()
             .find(|db| db.index == index)
             .context(format!("db {index} does not exist."))
     }
 
-    pub fn get_db(&self, index: usize) -> anyhow::Result<&Database> {
+    pub fn get_db(&self, index: usize) -> eyre::Result<&Database> {
         self.databases
             .iter()
             .find(|db| db.index == index)
@@ -275,7 +275,7 @@ impl Database {
         }
     }
 
-    pub fn generate_stream_id(&self, key: &str, ts: Option<i64>) -> anyhow::Result<StreamId> {
+    pub fn generate_stream_id(&self, key: &str, ts: Option<i64>) -> eyre::Result<StreamId> {
         let ts = ts
             .or_else(|| Some(chrono::Utc::now().timestamp_millis()))
             .unwrap();
@@ -293,13 +293,13 @@ impl Database {
                             seq: last_id.seq + 1,
                         })
                     } else if ts < last_id.ts {
-                        Err(anyhow::anyhow!("ERR The ID specified in XADD is equal or smaller than the target stream top item"))
+                        Err(eyre::eyre!("ERR The ID specified in XADD is equal or smaller than the target stream top item"))
                     } else {
                         Ok(StreamId { ts, seq: 0 })
                     }
                 } else {
                     if ts < 0 {
-                        Err(anyhow::anyhow!(format!("ts must be greater than 0",)))
+                        Err(eyre::eyre!("ts must be greater than 0"))
                     } else {
                         Ok({
                             StreamId {
@@ -312,7 +312,7 @@ impl Database {
             }
             _ => {
                 if ts < 0 {
-                    Err(anyhow::anyhow!(format!("ts must be greater than 0",)))
+                    Err(eyre::eyre!("ts must be greater than 0"))
                 } else {
                     Ok({
                         StreamId {
@@ -325,7 +325,7 @@ impl Database {
         }
     }
 
-    pub fn get_sorted_set(&mut self, key: String) -> anyhow::Result<Option<&mut SortedSet>> {
+    pub fn get_sorted_set(&mut self, key: String) -> eyre::Result<Option<&mut SortedSet>> {
         match self.map.entry(key) {
             Entry::Occupied(mut entry) => {
                 if entry.get().is_expired() {
@@ -430,7 +430,7 @@ pub struct StreamId {
 }
 
 impl StreamId {
-    pub fn parse_range_str(input: impl AsRef<str>) -> anyhow::Result<(i64, Option<usize>)> {
+    pub fn parse_range_str(input: impl AsRef<str>) -> eyre::Result<(i64, Option<usize>)> {
         let input = input.as_ref();
 
         let splits: Vec<_> = input.split("-").collect();
@@ -462,11 +462,11 @@ impl Into<String> for StreamId {
 }
 
 impl FromStr for StreamId {
-    type Err = anyhow::Error;
+    type Err = eyre::Report;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let splits: Vec<_> = s.split("-").collect();
         if splits.len() != 2 {
-            return Err(anyhow::Error::msg("Invalid stream id string."));
+            return Err(eyre::eyre!("Invalid stream id string."));
         }
 
         let ts = splits[0].parse().context("ts part must be a u64 string")?;

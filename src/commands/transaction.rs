@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use anyhow::Result;
+use eyre::Result;
 
 use crate::commands::CommandContext;
 use crate::message::Message;

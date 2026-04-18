@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use eyre::Result;
 use bytes::BytesMut;
 use tokio::{fs::OpenOptions, io::AsyncWriteExt};
 use tokio_util::codec::Encoder;

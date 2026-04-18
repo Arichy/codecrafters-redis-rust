@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use eyre::{Context, Result};
 use std::collections::VecDeque;
 use std::time::Duration;
 use tokio::time::timeout;

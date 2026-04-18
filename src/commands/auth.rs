@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use eyre::Result;
 use sha2::{Digest, Sha256};
 
 use crate::{commands::CommandContext, message::{Message, SimpleError}};

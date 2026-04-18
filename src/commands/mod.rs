@@ -1,4 +1,4 @@
-use anyhow::Result;
+use eyre::Result;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;

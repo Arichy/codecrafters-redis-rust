@@ -1,4 +1,4 @@
-use anyhow::Result;
+use eyre::Result;
 use futures_util::SinkExt;
 
 use crate::commands::CommandContext;

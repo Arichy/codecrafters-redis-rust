@@ -9,7 +9,7 @@ use crate::{
     core::zset::{zset_add, zset_range, zset_score},
     message::{Message, SimpleError},
 };
-use anyhow::{anyhow, Result};
+use eyre::{eyre, Result};
 
 mod decode;
 mod distance;
@@ -122,11 +122,11 @@ pub async fn search(ctx: &CommandContext, args: &[String]) -> Result<Option<Mess
     let unit = &args[6];
 
     if !fromlonlat.eq_ignore_ascii_case("fromlonlat") {
-        return Err(anyhow!("Only support FROMLONLAT"));
+        return Err(eyre!("Only support FROMLONLAT"));
     }
 
     if !byradius.eq_ignore_ascii_case("byradius") {
-        return Err(anyhow!("Only support BYRADIUS"));
+        return Err(eyre!("Only support BYRADIUS"));
     }
 
     let radius = match unit.as_str() {

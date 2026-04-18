@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use eyre::{Context, ContextCompat, Result};
 use bytes::Bytes;
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
@@ -67,7 +67,7 @@ struct CliArgs {
 fn parse_replicaof(s: &str) -> Result<SocketAddr> {
     let parts: Vec<_> = s.split(' ').collect();
     if parts.len() != 2 {
-        return Err(anyhow::Error::msg("Invalid replicaof format"));
+        return Err(eyre::eyre!("Invalid replicaof format"));
     }
     let addr = format!("{}:{}", parts[0], parts[1]);
     // Try direct parse first
@@ -91,12 +91,14 @@ fn parse_appendonly(s: &str) -> Result<bool> {
     } else if s.eq_ignore_ascii_case("no") {
         Ok(false)
     } else {
-        Err(anyhow::anyhow!("Invalid value: {s}"))
+        Err(eyre::eyre!("Invalid value: {s}"))
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    color_eyre::install()?;
+
     let cli_args = CliArgs::parse();
 
     let dir = cli_args

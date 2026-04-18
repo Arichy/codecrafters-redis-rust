@@ -1,4 +1,4 @@
-use anyhow::{Context as AnyhowContext, Result};
+use eyre::{Context, Result};
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time::{timeout, Instant};

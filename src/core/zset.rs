@@ -1,4 +1,4 @@
-use anyhow::Result;
+use eyre::Result;
 
 use crate::rdb::{Database, SortedSet, Value, ValueType};
 use crate::rdb::zset::ZSet;
