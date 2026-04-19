@@ -36,6 +36,7 @@ pub struct CommandContext {
     pub client_id: String,
     pub selected_db: Arc<RwLock<usize>>,
     pub is_slave: bool,
+    pub is_replay: bool,
     pub config: Arc<ServerConfig>,
     pub current_user: Option<Arc<User>>,
     pub in_transaction: bool,
@@ -87,12 +88,12 @@ pub(crate) async fn execute_inner(
         "echo" => server_cmds::echo(ctx, args).await,
         "get" => string::get(ctx, args).await,
         "set" => string::set(ctx, args, message).await,
-        "incr" => string::incr(ctx, args).await,
+        "incr" => string::incr(ctx, args, message).await,
 
         // List commands
         "lpush" => list::lpush(ctx, args, message).await,
         "rpush" => list::rpush(ctx, args, message).await,
-        "lpop" => list::lpop(ctx, args).await,
+        "lpop" => list::lpop(ctx, args, message).await,
         "llen" => list::llen(ctx, args).await,
         "lrange" => list::lrange(ctx, args).await,
         "blpop" => list::blpop(ctx, args).await,
@@ -103,12 +104,12 @@ pub(crate) async fn execute_inner(
         "xread" => stream::xread(ctx, args).await,
 
         // Sorted set commands
-        "zadd" => sorted_set::zadd(ctx, args).await,
+        "zadd" => sorted_set::zadd(ctx, args, message).await,
         "zrange" => sorted_set::zrange(ctx, args).await,
         "zrank" => sorted_set::zrank(ctx, args).await,
         "zcard" => sorted_set::zcard(ctx, args).await,
         "zscore" => sorted_set::zscore(ctx, args).await,
-        "zrem" => sorted_set::zrem(ctx, args).await,
+        "zrem" => sorted_set::zrem(ctx, args, message).await,
 
         // Pub/Sub commands
         "subscribe" => pubsub::subscribe(ctx, args).await,
@@ -126,7 +127,7 @@ pub(crate) async fn execute_inner(
         "command" => server_cmds::command(ctx, args).await,
 
         // Geo commands
-        "geoadd" => geo::add(ctx, args).await,
+        "geoadd" => geo::add(ctx, args, message).await,
         "geopos" => geo::pos(ctx, args).await,
         "geodist" => geo::distance(ctx, args).await,
         "geosearch" => geo::search(ctx, args).await,

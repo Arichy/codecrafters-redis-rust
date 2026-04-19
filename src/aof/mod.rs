@@ -22,14 +22,13 @@ impl AOF {
     }
 
     pub fn manifest_path(&self) -> PathBuf {
-        self.full_appendonlly_dir()
-            .join(PathBuf::from(format!("{}.manifest", self.appendfilename)))
+        PathBuf::from(format!("{}.manifest", self.appendfilename))
     }
 
     pub async fn get_current_aof_file(&self) -> Result<PathBuf> {
-        let manifest_filename = self.manifest_path();
+        let manifest_path = self.full_appendonlly_dir().join(self.manifest_path());
 
-        let content = tokio::fs::read_to_string(manifest_filename).await?;
+        let content = tokio::fs::read_to_string(manifest_path).await?;
         let mut lines = content.lines();
 
         let target = lines

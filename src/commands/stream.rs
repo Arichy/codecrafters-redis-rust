@@ -108,21 +108,29 @@ pub async fn xadd(
 
     drop(rdb);
 
-    // Notify watchers that this key has changed
-    ctx.server.watchers.notify(key);
+    // Skip all side effects during AOF replay
+    if !ctx.is_replay {
+        // Notify watchers that this key has changed
+        ctx.server.watchers.notify(key);
 
-    // Notify all waiting XREAD clients for this key
-    ctx.server.blocking.notify_stream_key(key).await;
+        // Notify all waiting XREAD clients for this key
+        ctx.server.blocking.notify_stream_key(key).await;
 
-    // Update replication offset and broadcast to replicas if this is a master
-    if !ctx.is_slave {
-        let mut repl = ctx.server.replication.write().await;
-        if repl.is_master() {
-            repl.acked_replica_count = 0;
-            repl.expected_offset += message.length()?;
+        // Update replication offset and broadcast to replicas if this is a master
+        if !ctx.is_slave {
+            let mut repl = ctx.server.replication.write().await;
+            if repl.is_master() {
+                repl.acked_replica_count = 0;
+                repl.expected_offset += message.length()?;
+            }
+            drop(repl);
+            ctx.server.replicas.broadcast(message).await;
+
+            // Write to AOF file
+            if ctx.server.aof.appendonly {
+                ctx.server.aof.write_to_current_aof_file(message.clone()).await?;
+            }
         }
-        drop(repl);
-        ctx.server.replicas.broadcast(message).await;
     }
 
     if ctx.is_slave {

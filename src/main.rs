@@ -7,18 +7,19 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use eyre::{Context, ContextCompat, Result};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use clap::Parser;
+use eyre::{Context, ContextCompat, Result};
 use futures_util::{SinkExt, StreamExt};
 use tokio::fs::{read, OpenOptions};
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, RwLock};
-use tokio_util::codec::Framed;
+use tokio_util::codec::{Decoder, Framed};
 
 use codecrafters_redis::aof::AOF;
 use codecrafters_redis::commands::{self, CommandContext, ServerConfig};
+use codecrafters_redis::commands::auth::User;
 use codecrafters_redis::message::{Integer, Message, MessageFramer, SimpleError, SimpleString};
 use codecrafters_redis::rdb::RDB;
 use codecrafters_redis::server::{ReplicationState, Role, Server};
@@ -137,30 +138,51 @@ async fn main() -> Result<()> {
     }
 
     // AOF
-    {
+    let mut aof_commands = {
         let args_read = args.read().await;
         if args_read.aof.appendonly {
             let aof_dir = args_read.aof.dir.join(&args_read.aof.appenddirname);
             tokio::fs::create_dir_all(&aof_dir).await?;
 
             let aof_filename = format!("{}.1.incr.aof", &args_read.aof.appendfilename);
+            let aof_file_path = aof_dir.join(PathBuf::from(&aof_filename));
+
+            // Create or open AOF file in append mode
             OpenOptions::new()
-                .write(true)
+                .append(true)
                 .create(true)
-                .open(aof_dir.join(PathBuf::from(&aof_filename)))
+                .open(&aof_file_path)
                 .await?;
 
             let manifest_path = args_read.aof.manifest_path();
-            let mut manifest_file = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .open(aof_dir.join(PathBuf::from(manifest_path)))
-                .await?;
-            manifest_file
-                .write_all(format!("file {} seq 1 type i", aof_filename).as_bytes())
-                .await;
+            let manifest_file_path = aof_dir.join(PathBuf::from(manifest_path));
+
+            // Only create manifest file if it doesn't exist (don't overwrite)
+            if !manifest_file_path.exists() {
+                let mut manifest_file = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&manifest_file_path)
+                    .await?;
+                manifest_file
+                    .write_all(format!("file {} seq 1 type i", aof_filename).as_bytes())
+                    .await?;
+            }
+
+            let current_aof_file = args_read.aof.get_current_aof_file().await?;
+            let current_aof_file = tokio::fs::read(current_aof_file).await?;
+            let mut current_aof_file = BytesMut::from(current_aof_file.as_slice());
+
+            let mut mf = MessageFramer;
+            let mut commands = vec![];
+            while let Ok(Some(message)) = mf.decode(&mut current_aof_file) {
+                commands.push(message);
+            }
+            Some(commands)
+        } else {
+            None
         }
-    }
+    };
 
     // Create replication state
     let repl_state = {
@@ -180,7 +202,51 @@ async fn main() -> Result<()> {
     };
 
     // Create server
-    let server = Server::new(rdb, aof, repl_state);
+    let server = Server::new(rdb, aof, Arc::new(aof_commands), repl_state);
+
+    // Replay AOF commands if any
+    if let Some(commands) = &*server.aof_commands {
+        println!("Replaying {} AOF commands...", commands.len());
+
+        let default_user = Arc::new(User {
+            name: "default".to_string(),
+            passwords: vec![],
+        });
+
+        let replay_config = Arc::new(ServerConfig {
+            dir: dir.clone(),
+            dbfilename: None,
+            aof: server.aof.clone(),
+        });
+
+        let mut replay_ctx = CommandContext {
+            server: server.clone(),
+            client_id: "aof-replay".to_string(),
+            selected_db: Arc::new(RwLock::new(0)),
+            is_slave: false,
+            is_replay: true,
+            config: replay_config,
+            current_user: Some(default_user),
+            in_transaction: false,
+            transaction_queue: VecDeque::new(),
+            is_dirty: Arc::new(AtomicBool::new(false)),
+        };
+
+        for message in commands {
+            if let Some((cmd, args)) = commands::parse_command(message) {
+                // Skip commands that shouldn't be replayed
+                if matches!(cmd.as_str(), "subscribe" | "unsubscribe" | "psubscribe" | "punsubscribe" | "publish" | "ping" | "quit" | "auth" | "acl" | "multi" | "exec" | "discard" | "watch" | "unwatch" | "replconf" | "psync" | "wait") {
+                    continue;
+                }
+
+                if let Err(e) = commands::execute(&mut replay_ctx, &cmd, &args, message).await {
+                    eprintln!("AOF replay error for command {}: {}", cmd, e);
+                }
+            }
+        }
+
+        println!("AOF replay completed.");
+    }
 
     // If slave, connect to master
     if let Some(master_addr) = master_addr {
@@ -365,6 +431,7 @@ async fn handle_client_with_framed(
         client_id: peer_addr.clone(),
         selected_db: Arc::clone(&selected_db),
         is_slave,
+        is_replay: false,
         config: Arc::clone(&config),
         current_user,
         in_transaction: false,

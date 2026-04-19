@@ -44,21 +44,29 @@ pub async fn lpush(ctx: &CommandContext, args: &[String], message: &Message) -> 
 
     drop(rdb);
 
-    // Notify watchers that this key has changed
-    ctx.server.watchers.notify(key);
+    // Skip all side effects during AOF replay
+    if !ctx.is_replay {
+        // Notify watchers that this key has changed
+        ctx.server.watchers.notify(key);
 
-    // Notify one waiting BLPOP client for this key
-    ctx.server.blocking.notify_list_key(key).await;
+        // Notify one waiting BLPOP client for this key
+        ctx.server.blocking.notify_list_key(key).await;
 
-    // Update replication offset and broadcast to replicas if this is a master
-    if !ctx.is_slave {
-        let mut repl = ctx.server.replication.write().await;
-        if repl.is_master() {
-            repl.acked_replica_count = 0;
-            repl.expected_offset += message.length()?;
+        // Update replication offset and broadcast to replicas if this is a master
+        if !ctx.is_slave {
+            let mut repl = ctx.server.replication.write().await;
+            if repl.is_master() {
+                repl.acked_replica_count = 0;
+                repl.expected_offset += message.length()?;
+            }
+            drop(repl);
+            ctx.server.replicas.broadcast(message).await;
+
+            // Write to AOF file
+            if ctx.server.aof.appendonly {
+                ctx.server.aof.write_to_current_aof_file(message.clone()).await?;
+            }
         }
-        drop(repl);
-        ctx.server.replicas.broadcast(message).await;
     }
 
     Ok(Some(Message::new_integer(len as i64)))
@@ -101,27 +109,35 @@ pub async fn rpush(ctx: &CommandContext, args: &[String], message: &Message) -> 
 
     drop(rdb);
 
-    // Notify watchers that this key has changed
-    ctx.server.watchers.notify(key);
+    // Skip all side effects during AOF replay
+    if !ctx.is_replay {
+        // Notify watchers that this key has changed
+        ctx.server.watchers.notify(key);
 
-    // Notify one waiting BLPOP client for this key
-    ctx.server.blocking.notify_list_key(key).await;
+        // Notify one waiting BLPOP client for this key
+        ctx.server.blocking.notify_list_key(key).await;
 
-    // Update replication offset and broadcast to replicas if this is a master
-    if !ctx.is_slave {
-        let mut repl = ctx.server.replication.write().await;
-        if repl.is_master() {
-            repl.acked_replica_count = 0;
-            repl.expected_offset += message.length()?;
+        // Update replication offset and broadcast to replicas if this is a master
+        if !ctx.is_slave {
+            let mut repl = ctx.server.replication.write().await;
+            if repl.is_master() {
+                repl.acked_replica_count = 0;
+                repl.expected_offset += message.length()?;
+            }
+            drop(repl);
+            ctx.server.replicas.broadcast(message).await;
+
+            // Write to AOF file
+            if ctx.server.aof.appendonly {
+                ctx.server.aof.write_to_current_aof_file(message.clone()).await?;
+            }
         }
-        drop(repl);
-        ctx.server.replicas.broadcast(message).await;
     }
 
     Ok(Some(Message::new_integer(len as i64)))
 }
 
-pub async fn lpop(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
+pub async fn lpop(ctx: &CommandContext, args: &[String], message: &Message) -> Result<Option<Message>> {
     if args.is_empty() {
         return Ok(Some(Message::SimpleError(SimpleError {
             string: "ERR wrong number of arguments for 'lpop' command".to_string(),
@@ -142,9 +158,28 @@ pub async fn lpop(ctx: &CommandContext, args: &[String]) -> Result<Option<Messag
     let result = lpop_internal(db, key, count);
     drop(rdb);
 
-    // Notify watchers if we actually popped something
-    if !matches!(result, Message::NullBulkString) {
-        ctx.server.watchers.notify(key);
+    // Skip all side effects during AOF replay
+    if !ctx.is_replay {
+        // Notify watchers if we actually popped something
+        if !matches!(result, Message::NullBulkString) {
+            ctx.server.watchers.notify(key);
+        }
+
+        // Update replication offset and broadcast to replicas if this is a master
+        if !ctx.is_slave {
+            let mut repl = ctx.server.replication.write().await;
+            if repl.is_master() {
+                repl.acked_replica_count = 0;
+                repl.expected_offset += message.length()?;
+            }
+            drop(repl);
+            ctx.server.replicas.broadcast(message).await;
+
+            // Write to AOF file
+            if ctx.server.aof.appendonly {
+                ctx.server.aof.write_to_current_aof_file(message.clone()).await?;
+            }
+        }
     }
 
     Ok(Some(result))

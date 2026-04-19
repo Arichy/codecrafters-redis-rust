@@ -15,7 +15,7 @@ mod decode;
 mod distance;
 mod encode;
 
-pub async fn add(ctx: &CommandContext, args: &[String]) -> Result<Option<Message>> {
+pub async fn add(ctx: &CommandContext, args: &[String], message: &Message) -> Result<Option<Message>> {
     let key = &args[0];
     let lo = &args[1];
     let la = &args[2];
@@ -43,9 +43,28 @@ pub async fn add(ctx: &CommandContext, args: &[String]) -> Result<Option<Message
 
     let count = ctx.with_db_mut(|db| zset_add(db, key, member, score as f64)).await?;
 
-    // Notify watchers if we actually added something
-    if count > 0 {
-        ctx.server.watchers.notify(key);
+    // Skip all side effects during AOF replay
+    if !ctx.is_replay {
+        // Notify watchers if we actually added something
+        if count > 0 {
+            ctx.server.watchers.notify(key);
+        }
+
+        // Update replication offset and broadcast to replicas if this is a master
+        if !ctx.is_slave {
+            let mut repl = ctx.server.replication.write().await;
+            if repl.is_master() {
+                repl.acked_replica_count = 0;
+                repl.expected_offset += message.length()?;
+            }
+            drop(repl);
+            ctx.server.replicas.broadcast(message).await;
+
+            // Write to AOF file
+            if ctx.server.aof.appendonly {
+                ctx.server.aof.write_to_current_aof_file(message.clone()).await?;
+            }
+        }
     }
 
     Ok(Some(Message::new_integer(count)))

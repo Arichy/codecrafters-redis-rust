@@ -16,6 +16,7 @@ pub struct Server {
     /// The main database
     pub rdb: Arc<RwLock<RDB>>,
     pub aof: Arc<AOF>,
+    pub aof_commands: Arc<Option<Vec<Message>>>,
     /// Blocking operations manager
     pub blocking: Arc<BlockingManager>,
     /// Pub/Sub manager
@@ -31,7 +32,12 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(rdb: RDB, aof: Arc<AOF>, replication_state: ReplicationState) -> Self {
+    pub fn new(
+        rdb: RDB,
+        aof: Arc<AOF>,
+        aof_commands: Arc<Option<Vec<Message>>>,
+        replication_state: ReplicationState,
+    ) -> Self {
         let default_user = User {
             name: "default".to_string(),
             passwords: vec![],
@@ -43,6 +49,7 @@ impl Server {
         Self {
             rdb: Arc::new(RwLock::new(rdb)),
             aof,
+            aof_commands,
             blocking: Arc::new(BlockingManager::new()),
             pubsub: Arc::new(PubSubManager::new()),
             replication: Arc::new(RwLock::new(replication_state)),
